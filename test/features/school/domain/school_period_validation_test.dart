@@ -1,0 +1,70 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:teacher_substitute/features/school/data/school_database.dart';
+import 'package:teacher_substitute/features/school/domain/school_models.dart';
+
+SchoolPeriod period({
+  required int id,
+  required int start,
+  required int end,
+  bool active = true,
+}) => SchoolPeriod(
+  id: id,
+  name: 'Period $id',
+  startMinute: start,
+  endMinute: end,
+  isActive: active,
+  sortOrder: id,
+);
+
+void main() {
+  group('validateSchoolPeriodConfiguration', () {
+    test('allows ordered periods with gaps and inactive overlaps', () {
+      expect(
+        () => validateSchoolPeriodConfiguration([
+          period(id: 1, start: 480, end: 525),
+          period(id: 2, start: 540, end: 585),
+          period(id: 3, start: 500, end: 550, active: false),
+        ]),
+        returnsNormally,
+      );
+    });
+
+    test('rejects overlapping active periods', () {
+      expect(
+        () => validateSchoolPeriodConfiguration([
+          period(id: 1, start: 480, end: 530),
+          period(id: 2, start: 525, end: 570),
+        ]),
+        throwsA(isA<DuplicateSchoolRecordException>()),
+      );
+    });
+
+    test('rejects duplicate ids, blank names, and invalid times', () {
+      expect(
+        () => validateSchoolPeriodConfiguration([
+          period(id: 1, start: 480, end: 525),
+          period(id: 1, start: 540, end: 585),
+        ]),
+        throwsA(isA<DuplicateSchoolRecordException>()),
+      );
+      expect(
+        () => validateSchoolPeriodConfiguration([
+          const SchoolPeriod(
+            id: 3,
+            name: ' ',
+            startMinute: 480,
+            endMinute: 525,
+            isActive: true,
+          ),
+        ]),
+        throwsA(isA<SchoolDataException>()),
+      );
+      expect(
+        () => validateSchoolPeriodConfiguration([
+          period(id: 4, start: 525, end: 480),
+        ]),
+        throwsA(isA<SchoolDataException>()),
+      );
+    });
+  });
+}

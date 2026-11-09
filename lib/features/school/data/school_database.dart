@@ -17,6 +17,8 @@ abstract interface class SchoolDatabase {
   Future<void> setSubjectActive(int id, bool isActive);
   Future<List<SchoolPeriod>> getPeriods();
   Future<void> savePeriod(SchoolPeriod period);
+  Future<void> savePeriodConfiguration(List<SchoolPeriod> periods);
+  Future<void> deletePeriod(int id);
   Future<void> setPeriodActive(int id, bool isActive);
   Future<List<int>> getWorkingDays();
   Future<void> saveWorkingDays(List<int> days);
@@ -43,4 +45,35 @@ class DuplicateSchoolRecordException implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+void validateSchoolPeriodConfiguration(List<SchoolPeriod> periods) {
+  final ids = <int>{};
+  final active = <SchoolPeriod>[];
+  for (final period in periods) {
+    if (period.id != null && !ids.add(period.id!)) {
+      throw const DuplicateSchoolRecordException(
+        'A period appears more than once in this schedule.',
+      );
+    }
+    if (period.name.trim().isEmpty) {
+      throw const SchoolDataException('Every period needs a name.');
+    }
+    if (period.startMinute < 0 ||
+        period.endMinute > 1439 ||
+        period.startMinute >= period.endMinute) {
+      throw const SchoolDataException(
+        'Enter valid period start and end times.',
+      );
+    }
+    if (period.isActive) active.add(period);
+  }
+  active.sort((a, b) => a.startMinute.compareTo(b.startMinute));
+  for (var index = 1; index < active.length; index++) {
+    if (active[index].startMinute < active[index - 1].endMinute) {
+      throw const DuplicateSchoolRecordException(
+        'Active period times cannot overlap.',
+      );
+    }
+  }
 }

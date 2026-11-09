@@ -298,9 +298,14 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
         startMinute: data['startMinute'] as int? ?? 0,
         endMinute: data['endMinute'] as int? ?? 0,
         isActive: data['isActive'] as bool? ?? true,
+        sortOrder:
+            data['sortOrder'] as int? ?? data['startMinute'] as int? ?? 0,
       );
     }).toList();
-    periods.sort((a, b) => a.startMinute.compareTo(b.startMinute));
+    periods.sort((a, b) {
+      final byOrder = a.sortOrder.compareTo(b.sortOrder);
+      return byOrder != 0 ? byOrder : a.startMinute.compareTo(b.startMinute);
+    });
     return periods;
   }
 
@@ -332,8 +337,104 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       'startMinute': period.startMinute,
       'endMinute': period.endMinute,
       'isActive': period.isActive,
+      'sortOrder': period.sortOrder,
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  @override
+  Future<void> savePeriodConfiguration(List<SchoolPeriod> periods) async {
+    validateSchoolPeriodConfiguration(periods);
+    final collection = await _collection('periods');
+    final existing = await collection.get();
+    final existingIds = existing.docs.map((doc) => doc.id).toSet();
+    final requestedIds = periods
+        .where((period) => period.id != null)
+        .map((period) => '${period.id}')
+        .toSet();
+    if (!existingIds.containsAll(requestedIds) ||
+        !requestedIds.containsAll(existingIds)) {
+      throw const SchoolDataException(
+        'The period list changed. Reload the timetable and try again.',
+      );
+    }
+
+    final lessonSnapshot = await (await _collection('timetables')).get();
+    final assignedIds = lessonSnapshot.docs
+        .map((doc) => doc.data()['periodId'])
+        .whereType<int>()
+        .toSet();
+    for (final period in periods) {
+      if (period.id != null &&
+          assignedIds.contains(period.id) &&
+          !period.isActive) {
+        throw const SchoolDataException(
+          'A period with timetable lessons cannot be deactivated. Its lessons were preserved.',
+        );
+      }
+    }
+
+    final schedule = periods
+        .map(
+          (period) => SchoolPeriod(
+            id: period.id ?? _newId(),
+            name: period.name.trim(),
+            startMinute: period.startMinute,
+            endMinute: period.endMinute,
+            isActive: period.isActive,
+            sortOrder: period.sortOrder,
+          ),
+        )
+        .toList(growable: false);
+    final refs = schedule
+        .map((period) => collection.doc('${period.id}'))
+        .toList();
+    await _firestore.runTransaction<void>((transaction) async {
+      final snapshots = <DocumentSnapshot<Map<String, dynamic>>>[];
+      for (final ref in refs) {
+        snapshots.add(await transaction.get(ref));
+      }
+      for (var index = 0; index < schedule.length; index++) {
+        final wasExisting = periods[index].id != null;
+        if (wasExisting != snapshots[index].exists) {
+          throw const SchoolDataException(
+            'The period list changed. Reload the timetable and try again.',
+          );
+        }
+      }
+      for (var index = 0; index < schedule.length; index++) {
+        final period = schedule[index];
+        transaction.set(refs[index], {
+          'id': period.id,
+          'name': period.name,
+          'startMinute': period.startMinute,
+          'endMinute': period.endMinute,
+          'sortOrder': period.sortOrder,
+          'isActive': period.isActive,
+          'updatedAt': FieldValue.serverTimestamp(),
+        }, SetOptions(merge: true));
+      }
+    });
+  }
+
+  @override
+  Future<void> deletePeriod(int id) async {
+    final lessons = await (await _collection(
+      'timetables',
+    )).where('periodId', isEqualTo: id).limit(1).get();
+    final substitutions = await (await _collection(
+      'substitutions',
+    )).where('periodId', isEqualTo: id).limit(1).get();
+    if (lessons.docs.isNotEmpty || substitutions.docs.isNotEmpty) {
+      throw const SchoolDataException(
+        'This period is used by timetable or substitution history. Deactivate it to preserve those records.',
+      );
+    }
+    final ref = (await _collection('periods')).doc('$id');
+    if (!(await ref.get()).exists) {
+      throw const SchoolDataException('Period not found.');
+    }
+    await ref.delete();
   }
 
   @override

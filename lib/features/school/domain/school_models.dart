@@ -95,6 +95,7 @@ class SchoolPeriod {
     required this.startMinute,
     required this.endMinute,
     required this.isActive,
+    this.sortOrder = 0,
   });
 
   final int? id;
@@ -102,6 +103,7 @@ class SchoolPeriod {
   final int startMinute;
   final int endMinute;
   final bool isActive;
+  final int sortOrder;
 
   factory SchoolPeriod.fromMap(Map<String, Object?> row) => SchoolPeriod(
     id: row['id'] as int?,
@@ -109,6 +111,12 @@ class SchoolPeriod {
     startMinute: row['startMinute'] as int? ?? row['start_minute'] as int? ?? 0,
     endMinute: row['endMinute'] as int? ?? row['end_minute'] as int? ?? 0,
     isActive: row['isActive'] as bool? ?? (row['is_active'] == 1),
+    sortOrder:
+        row['sortOrder'] as int? ??
+        row['sort_order'] as int? ??
+        row['startMinute'] as int? ??
+        row['start_minute'] as int? ??
+        0,
   );
 }
 

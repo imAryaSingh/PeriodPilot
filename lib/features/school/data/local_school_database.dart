@@ -15,7 +15,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
     final basePath = await getDatabasesPath();
     return openDatabase(
       path.join(basePath, 'teacher_substitute.db'),
-      version: 5,
+      version: 6,
       onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
       onCreate: (database, version) async {
         await database.execute('''
@@ -87,6 +87,16 @@ class LocalSchoolDatabase implements SchoolDatabase {
         if (oldVersion < 3) await _createAbsenceTable(database);
         if (oldVersion < 4) await _createSubstitutionTable(database);
         if (oldVersion < 5) await _rebuildSubstitutionTable(database);
+        if (oldVersion < 6) {
+          if (oldVersion >= 2) {
+            await database.execute(
+              'ALTER TABLE periods ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
+            );
+          }
+          await database.execute(
+            'UPDATE periods SET sort_order = start_minute',
+          );
+        }
       },
     );
   }
@@ -98,6 +108,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
         name TEXT NOT NULL UNIQUE,
         start_minute INTEGER NOT NULL,
         end_minute INTEGER NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
         is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
         CHECK (start_minute >= 0 AND end_minute <= 1439 AND start_minute < end_minute)
       )
@@ -361,7 +372,10 @@ class LocalSchoolDatabase implements SchoolDatabase {
   @override
   Future<List<SchoolPeriod>> getPeriods() async {
     final db = await database;
-    final rows = await db.query('periods', orderBy: 'start_minute, name');
+    final rows = await db.query(
+      'periods',
+      orderBy: 'sort_order, start_minute, name',
+    );
     return rows.map(SchoolPeriod.fromMap).toList(growable: false);
   }
 
@@ -388,6 +402,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
       'name': period.name.trim(),
       'start_minute': period.startMinute,
       'end_minute': period.endMinute,
+      'sort_order': period.sortOrder,
       'is_active': period.isActive ? 1 : 0,
     };
     if (period.id == null) {
@@ -400,6 +415,93 @@ class LocalSchoolDatabase implements SchoolDatabase {
         whereArgs: [period.id],
       );
     }
+  }
+
+  @override
+  Future<void> savePeriodConfiguration(List<SchoolPeriod> periods) async {
+    validateSchoolPeriodConfiguration(periods);
+    final db = await database;
+    await db.transaction((txn) async {
+      final existingRows = await txn.query('periods', columns: ['id']);
+      final existingIds = existingRows.map((row) => row['id'] as int).toSet();
+      final requestedIds = periods
+          .where((period) => period.id != null)
+          .map((period) => period.id!)
+          .toSet();
+      if (!existingIds.containsAll(requestedIds) ||
+          !requestedIds.containsAll(existingIds)) {
+        throw const SchoolDataException(
+          'The period list changed. Reload the timetable and try again.',
+        );
+      }
+      final entryRows = await txn.query(
+        'timetable_entries',
+        columns: ['period_id'],
+      );
+      final assignedIds = entryRows
+          .map((row) => row['period_id'] as int)
+          .toSet();
+      for (final period in periods) {
+        if (period.id != null &&
+            assignedIds.contains(period.id) &&
+            !period.isActive) {
+          throw const SchoolDataException(
+            'A period with timetable lessons cannot be deactivated. Its lessons were preserved.',
+          );
+        }
+      }
+      for (final period in periods) {
+        final values = {
+          'name': period.name.trim(),
+          'start_minute': period.startMinute,
+          'end_minute': period.endMinute,
+          'sort_order': period.sortOrder,
+          'is_active': period.isActive ? 1 : 0,
+        };
+        if (period.id == null) {
+          await txn.insert('periods', values);
+        } else {
+          await txn.update(
+            'periods',
+            values,
+            where: 'id = ?',
+            whereArgs: [period.id],
+          );
+        }
+      }
+    });
+  }
+
+  @override
+  Future<void> deletePeriod(int id) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final lessons = await txn.query(
+        'timetable_entries',
+        columns: ['id'],
+        where: 'period_id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      final substitutions = await txn.query(
+        'substitutions',
+        columns: ['id'],
+        where: 'period_id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (lessons.isNotEmpty || substitutions.isNotEmpty) {
+        throw const SchoolDataException(
+          'This period is used by timetable or substitution history. Deactivate it to preserve those records.',
+        );
+      }
+      final removed = await txn.delete(
+        'periods',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+      if (removed == 0) throw const SchoolDataException('Period not found.');
+    });
   }
 
   @override

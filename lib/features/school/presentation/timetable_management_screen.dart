@@ -127,11 +127,16 @@ class _PeriodsTab extends StatefulWidget {
 class _PeriodsTabState extends State<_PeriodsTab> {
   late Set<int> _workingDays;
   bool _savingDays = false;
+  bool _savingPeriods = false;
+  int? _selectedPreset;
 
   @override
   void initState() {
     super.initState();
     _workingDays = widget.data.workingDays.toSet();
+    _selectedPreset = _presetForCount(
+      widget.data.periods.where((period) => period.isActive).length,
+    );
   }
 
   @override
@@ -139,6 +144,9 @@ class _PeriodsTabState extends State<_PeriodsTab> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.data != widget.data) {
       _workingDays = widget.data.workingDays.toSet();
+      _selectedPreset = _presetForCount(
+        widget.data.periods.where((period) => period.isActive).length,
+      );
     }
   }
 
@@ -162,13 +170,49 @@ class _PeriodsTabState extends State<_PeriodsTab> {
   }
 
   Future<void> _editPeriod([SchoolPeriod? period]) async {
+    final nextOrder = widget.data.periods.isEmpty
+        ? 0
+        : widget.data.periods
+                  .map((item) => item.sortOrder)
+                  .reduce((a, b) => a > b ? a : b) +
+              1;
     final result = await showDialog<SchoolPeriod>(
       context: context,
-      builder: (_) => _PeriodDialog(period: period),
+      builder: (_) => _PeriodDialog(period: period, sortOrder: nextOrder),
     );
     if (result == null || !mounted) return;
+    if (period != null &&
+        (result.startMinute != period.startMinute ||
+            result.endMinute != period.endMinute)) {
+      final lessonCount = widget.data.entries
+          .where((entry) => entry.periodId == period.id)
+          .length;
+      if (lessonCount > 0) {
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Change a period used by lessons?'),
+            content: Text(
+              'This changes the time shown for $lessonCount timetable lesson${lessonCount == 1 ? '' : 's'} linked to ${period.name}. The lesson records will stay assigned to this period.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Keep current time'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Change time'),
+              ),
+            ],
+          ),
+        );
+        if (proceed != true || !mounted) return;
+      }
+    }
     try {
       await context.read<SchoolDatabase>().savePeriod(result);
+      if (mounted) setState(() => _selectedPreset = null);
       widget.onReload();
     } catch (error) {
       if (mounted) _showMessage(context, _friendlyError(error));
@@ -178,9 +222,208 @@ class _PeriodsTabState extends State<_PeriodsTab> {
   Future<void> _setActive(SchoolPeriod period, bool value) async {
     try {
       await context.read<SchoolDatabase>().setPeriodActive(period.id!, value);
+      if (mounted) setState(() => _selectedPreset = null);
       widget.onReload();
     } catch (error) {
       if (mounted) _showMessage(context, _friendlyError(error));
+    }
+  }
+
+  Future<void> _deletePeriod(SchoolPeriod period) async {
+    final remove = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Remove this period?'),
+        content: const Text(
+          'A period used by timetable lessons or substitution history cannot be deleted. Those records will be preserved.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Keep period'),
+          ),
+          FilledButton.tonal(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Remove period'),
+          ),
+        ],
+      ),
+    );
+    if (remove != true || !mounted) return;
+    try {
+      await context.read<SchoolDatabase>().deletePeriod(period.id!);
+      widget.onReload();
+    } catch (error) {
+      if (mounted) _showMessage(context, _friendlyError(error));
+    }
+  }
+
+  Future<void> _reorderPeriods(int oldIndex, int newIndex) async {
+    if (_savingPeriods || oldIndex == newIndex) return;
+    final periods = [...widget.data.periods];
+    final period = periods.removeAt(oldIndex);
+    periods.insert(newIndex, period);
+    final ordered = [
+      for (var index = 0; index < periods.length; index++)
+        _withPeriod(periods[index], sortOrder: index),
+    ];
+    setState(() => _savingPeriods = true);
+    try {
+      await context.read<SchoolDatabase>().savePeriodConfiguration(ordered);
+      widget.onReload();
+    } catch (error) {
+      if (mounted) _showMessage(context, _friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _savingPeriods = false);
+    }
+  }
+
+  Future<void> _configurePreset(int count) async {
+    final active = widget.data.periods.where((p) => p.isActive).toList();
+    final initialStart = active.isEmpty ? 8 * 60 : active.first.startMinute;
+    final initialDuration = active.isEmpty
+        ? 45
+        : (active.first.endMinute - active.first.startMinute)
+              .clamp(20, 120)
+              .toInt();
+    final options = await showDialog<_ScheduleOptions>(
+      context: context,
+      builder: (_) => _ScheduleGeneratorDialog(
+        periodCount: count,
+        initialStart: initialStart,
+        initialDuration: initialDuration,
+      ),
+    );
+    if (options == null || !mounted) return;
+
+    try {
+      final existingActive = widget.data.periods
+          .where((period) => period.isActive)
+          .toList();
+      final configured = <SchoolPeriod>[];
+      var cursor = options.startMinute;
+      for (var index = 0; index < count; index++) {
+        final start = cursor;
+        final end = start + options.periodDuration;
+        if (end > 1439) {
+          throw const SchoolDataException(
+            'These settings place a period past the end of the day. Choose an earlier start time or shorter periods/breaks.',
+          );
+        }
+        configured.add(
+          SchoolPeriod(
+            id: index < existingActive.length ? existingActive[index].id : null,
+            name: 'Period ${index + 1}',
+            startMinute: start,
+            endMinute: end,
+            isActive: true,
+            sortOrder: index,
+          ),
+        );
+        cursor = end;
+        if (options.breakAfter == index + 1) {
+          cursor += options.breakDuration;
+        }
+        if (options.lunchAfter == index + 1) {
+          cursor += options.lunchDuration;
+        }
+      }
+
+      final retainedExtra = <SchoolPeriod>[];
+      final inactiveExisting = <SchoolPeriod>[];
+      for (final extra in existingActive.skip(count)) {
+        final hasLessons = widget.data.entries.any(
+          (entry) => entry.periodId == extra.id,
+        );
+        if (hasLessons) {
+          final duration = extra.endMinute - extra.startMinute;
+          final start = cursor == 1439 ? cursor : cursor + 5;
+          final end = start + duration;
+          if (end > 1439) {
+            throw SchoolDataException(
+              '${extra.name} has existing timetable lessons and cannot fit after the generated $count periods. Adjust the generated times to leave room for it.',
+            );
+          }
+          retainedExtra.add(
+            SchoolPeriod(
+              id: extra.id,
+              name: extra.name,
+              startMinute: start,
+              endMinute: end,
+              isActive: true,
+              sortOrder: count + retainedExtra.length,
+            ),
+          );
+          cursor = end;
+        } else {
+          inactiveExisting.add(_withPeriod(extra, isActive: false));
+        }
+      }
+      final otherInactive = widget.data.periods
+          .where((period) => !period.isActive)
+          .toList();
+      final configuration = [
+        ...configured,
+        ...retainedExtra,
+        ...inactiveExisting,
+        ...otherInactive,
+      ];
+      final ordered = [
+        for (var index = 0; index < configuration.length; index++)
+          _withPeriod(configuration[index], sortOrder: index),
+      ];
+      final changesExistingLessons = widget.data.entries.where((entry) {
+        final old = widget.data.periods
+            .where((period) => period.id == entry.periodId)
+            .firstOrNull;
+        final next = ordered
+            .where((period) => period.id == entry.periodId)
+            .firstOrNull;
+        return old == null ||
+            next == null ||
+            !next.isActive ||
+            old.startMinute != next.startMinute ||
+            old.endMinute != next.endMinute;
+      }).length;
+      if (changesExistingLessons > 0) {
+        final proceed = await showDialog<bool>(
+          context: context,
+          builder: (dialogContext) => AlertDialog(
+            title: const Text('Apply this period schedule?'),
+            content: Text(
+              'This changes the timing of periods used by $changesExistingLessons existing timetable lesson${changesExistingLessons == 1 ? '' : 's'}. Lesson records stay linked to their existing period IDs. Extra periods with lessons will be kept active after the generated schedule; unused extra periods will be deactivated. No lesson records will be deleted.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Review settings'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                child: const Text('Apply schedule'),
+              ),
+            ],
+          ),
+        );
+        if (proceed != true || !mounted) return;
+      }
+
+      setState(() => _savingPeriods = true);
+      await context.read<SchoolDatabase>().savePeriodConfiguration(ordered);
+      if (!mounted) return;
+      setState(() => _selectedPreset = count);
+      final extraCount = retainedExtra.length;
+      _showMessage(
+        context,
+        extraCount == 0
+            ? '$count periods configured.'
+            : '$count periods configured. $extraCount additional period${extraCount == 1 ? '' : 's'} with lessons kept active.',
+      );
+      widget.onReload();
+    } catch (error) {
+      if (mounted) _showMessage(context, _friendlyError(error));
+    } finally {
+      if (mounted) setState(() => _savingPeriods = false);
     }
   }
 
@@ -255,6 +498,35 @@ class _PeriodsTabState extends State<_PeriodsTab> {
         const SizedBox(height: 16),
         Text('Periods', style: theme.textTheme.titleLarge),
         const SizedBox(height: 8),
+        Text(
+          'Choose a starting schedule, then adjust individual periods as needed.',
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final count in [6, 7, 8])
+              ChoiceChip(
+                label: Text('$count periods'),
+                selected: _selectedPreset == count,
+                onSelected: _savingPeriods
+                    ? null
+                    : (_) => _configurePreset(count),
+              ),
+            ChoiceChip(
+              label: const Text('Custom / manual'),
+              selected: _selectedPreset == null,
+              onSelected: _savingPeriods
+                  ? null
+                  : (_) => setState(() => _selectedPreset = null),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
         if (widget.data.periods.isEmpty)
           const _EmptyPanel(
             icon: Icons.schedule_rounded,
@@ -262,44 +534,72 @@ class _PeriodsTabState extends State<_PeriodsTab> {
             message: 'Add the school’s first period to start a timetable.',
           )
         else
-          ...widget.data.periods.map((period) {
-            return Card(
-              child: ListTile(
-                leading: CircleAvatar(
-                  backgroundColor: theme.colorScheme.primaryContainer,
-                  foregroundColor: theme.colorScheme.onPrimaryContainer,
-                  child: Text('${widget.data.periods.indexOf(period) + 1}'),
+          ReorderableListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            buildDefaultDragHandles: false,
+            itemCount: widget.data.periods.length,
+            onReorderItem: _reorderPeriods,
+            itemBuilder: (context, index) {
+              final period = widget.data.periods[index];
+              return Card(
+                key: ValueKey('school-period-${period.id}'),
+                child: ListTile(
+                  leading: CircleAvatar(
+                    backgroundColor: theme.colorScheme.primaryContainer,
+                    foregroundColor: theme.colorScheme.onPrimaryContainer,
+                    child: Text('${index + 1}'),
+                  ),
+                  title: Text(period.name),
+                  subtitle: Text(
+                    '${_formatMinute(period.startMinute)} – ${_formatMinute(period.endMinute)}${period.isActive ? '' : ' · Inactive'}',
+                  ),
+                  trailing: Wrap(
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: [
+                      ReorderableDragStartListener(
+                        index: index,
+                        child: const Padding(
+                          padding: EdgeInsets.all(8),
+                          child: Icon(Icons.drag_indicator_rounded),
+                        ),
+                      ),
+                      IconButton(
+                        tooltip: 'Edit period',
+                        onPressed: _savingPeriods
+                            ? null
+                            : () => _editPeriod(period),
+                        icon: const Icon(Icons.edit_outlined),
+                      ),
+                      IconButton(
+                        tooltip: 'Remove unused period',
+                        onPressed: _savingPeriods
+                            ? null
+                            : () => _deletePeriod(period),
+                        icon: const Icon(Icons.delete_outline_rounded),
+                      ),
+                      Switch(
+                        value: period.isActive,
+                        onChanged: _savingPeriods
+                            ? null
+                            : (value) => _setActive(period, value),
+                      ),
+                    ],
+                  ),
                 ),
-                title: Text(period.name),
-                subtitle: Text(
-                  '${_formatMinute(period.startMinute)} – ${_formatMinute(period.endMinute)}${period.isActive ? '' : ' · Inactive'}',
-                ),
-                trailing: Wrap(
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: [
-                    IconButton(
-                      tooltip: 'Edit period',
-                      onPressed: () => _editPeriod(period),
-                      icon: const Icon(Icons.edit_outlined),
-                    ),
-                    Switch(
-                      value: period.isActive,
-                      onChanged: (value) => _setActive(period, value),
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
+              );
+            },
+          ),
       ],
     );
   }
 }
 
 class _PeriodDialog extends StatefulWidget {
-  const _PeriodDialog({this.period});
+  const _PeriodDialog({this.period, required this.sortOrder});
 
   final SchoolPeriod? period;
+  final int sortOrder;
 
   @override
   State<_PeriodDialog> createState() => _PeriodDialogState();
@@ -360,6 +660,7 @@ class _PeriodDialogState extends State<_PeriodDialog> {
         startMinute: start,
         endMinute: end,
         isActive: widget.period?.isActive ?? true,
+        sortOrder: widget.period?.sortOrder ?? widget.sortOrder,
       ),
     );
   }
@@ -421,6 +722,241 @@ class _PeriodDialogState extends State<_PeriodDialog> {
       ),
       FilledButton(onPressed: _submit, child: const Text('Save period')),
     ],
+  );
+}
+
+int? _presetForCount(int count) => [6, 7, 8].contains(count) ? count : null;
+
+SchoolPeriod _withPeriod(
+  SchoolPeriod period, {
+  int? sortOrder,
+  bool? isActive,
+}) => SchoolPeriod(
+  id: period.id,
+  name: period.name,
+  startMinute: period.startMinute,
+  endMinute: period.endMinute,
+  isActive: isActive ?? period.isActive,
+  sortOrder: sortOrder ?? period.sortOrder,
+);
+
+class _ScheduleOptions {
+  const _ScheduleOptions({
+    required this.startMinute,
+    required this.periodDuration,
+    required this.breakAfter,
+    required this.breakDuration,
+    required this.lunchAfter,
+    required this.lunchDuration,
+  });
+
+  final int startMinute;
+  final int periodDuration;
+  final int? breakAfter;
+  final int breakDuration;
+  final int? lunchAfter;
+  final int lunchDuration;
+}
+
+class _ScheduleGeneratorDialog extends StatefulWidget {
+  const _ScheduleGeneratorDialog({
+    required this.periodCount,
+    required this.initialStart,
+    required this.initialDuration,
+  });
+
+  final int periodCount;
+  final int initialStart;
+  final int initialDuration;
+
+  @override
+  State<_ScheduleGeneratorDialog> createState() =>
+      _ScheduleGeneratorDialogState();
+}
+
+class _ScheduleGeneratorDialogState extends State<_ScheduleGeneratorDialog> {
+  late TimeOfDay _start;
+  late int _duration;
+  bool _includeBreak = true;
+  int _breakAfter = 3;
+  int _breakDuration = 15;
+  bool _includeLunch = false;
+  int _lunchAfter = 5;
+  int _lunchDuration = 40;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _start = _timeFromMinute(widget.initialStart);
+    _duration = widget.initialDuration;
+    _breakAfter = (widget.periodCount ~/ 2).clamp(1, widget.periodCount - 1);
+    _lunchAfter = (widget.periodCount - 1).clamp(1, widget.periodCount - 1);
+  }
+
+  Future<void> _chooseStart() async {
+    final selected = await showTimePicker(
+      context: context,
+      initialTime: _start,
+    );
+    if (selected != null && mounted) setState(() => _start = selected);
+  }
+
+  void _submit() {
+    if (_includeBreak && _includeLunch && _breakAfter == _lunchAfter) {
+      setState(
+        () => _error = 'Place the break and lunch after different periods.',
+      );
+      return;
+    }
+    Navigator.pop(
+      context,
+      _ScheduleOptions(
+        startMinute: _minuteFromTime(_start),
+        periodDuration: _duration,
+        breakAfter: _includeBreak ? _breakAfter : null,
+        breakDuration: _breakDuration,
+        lunchAfter: _includeLunch ? _lunchAfter : null,
+        lunchDuration: _lunchDuration,
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final insertionPoints = List.generate(widget.periodCount - 1, (i) => i + 1);
+    return AlertDialog(
+      title: Text('Configure ${widget.periodCount} periods'),
+      content: SizedBox(
+        width: 440,
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              OutlinedButton.icon(
+                onPressed: _chooseStart,
+                icon: const Icon(Icons.access_time_rounded),
+                label: Text('School starts at ${_start.format(context)}'),
+              ),
+              const SizedBox(height: 12),
+              DropdownButtonFormField<int>(
+                initialValue: _duration,
+                decoration: const InputDecoration(
+                  labelText: 'Minutes per period',
+                ),
+                items: [30, 35, 40, 45, 50, 55, 60, 75, 90, 120]
+                    .map(
+                      (value) => DropdownMenuItem(
+                        value: value,
+                        child: Text('$value minutes'),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (value) =>
+                    setState(() => _duration = value ?? _duration),
+              ),
+              const SizedBox(height: 8),
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Add a short break'),
+                value: _includeBreak,
+                onChanged: (value) => setState(() => _includeBreak = value),
+              ),
+              if (_includeBreak) ...[
+                _insertionSelector(
+                  'Break after period',
+                  _breakAfter,
+                  insertionPoints,
+                  (v) => setState(() => _breakAfter = v),
+                ),
+                _durationSelector('Break length', _breakDuration, [
+                  5,
+                  10,
+                  15,
+                  20,
+                  25,
+                  30,
+                ], (v) => setState(() => _breakDuration = v)),
+              ],
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                title: const Text('Add a lunch interval'),
+                value: _includeLunch,
+                onChanged: (value) => setState(() => _includeLunch = value),
+              ),
+              if (_includeLunch) ...[
+                _insertionSelector(
+                  'Lunch after period',
+                  _lunchAfter,
+                  insertionPoints,
+                  (v) => setState(() => _lunchAfter = v),
+                ),
+                _durationSelector('Lunch length', _lunchDuration, [
+                  20,
+                  25,
+                  30,
+                  35,
+                  40,
+                  45,
+                  50,
+                  60,
+                ], (v) => setState(() => _lunchDuration = v)),
+              ],
+              if (_error != null) ...[
+                const SizedBox(height: 8),
+                Text(
+                  _error!,
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _submit,
+          child: const Text('Generate schedule'),
+        ),
+      ],
+    );
+  }
+
+  Widget _insertionSelector(
+    String label,
+    int value,
+    List<int> values,
+    ValueChanged<int> onChanged,
+  ) => DropdownButtonFormField<int>(
+    initialValue: values.contains(value) ? value : values.first,
+    decoration: InputDecoration(labelText: label),
+    items: values
+        .map((n) => DropdownMenuItem(value: n, child: Text('After period $n')))
+        .toList(),
+    onChanged: (selected) {
+      if (selected != null) onChanged(selected);
+    },
+  );
+
+  Widget _durationSelector(
+    String label,
+    int value,
+    List<int> values,
+    ValueChanged<int> onChanged,
+  ) => DropdownButtonFormField<int>(
+    initialValue: values.contains(value) ? value : values.first,
+    decoration: InputDecoration(labelText: label),
+    items: values
+        .map((n) => DropdownMenuItem(value: n, child: Text('$n minutes')))
+        .toList(),
+    onChanged: (selected) {
+      if (selected != null) onChanged(selected);
+    },
   );
 }
 
@@ -789,7 +1325,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     final first = periods.indexWhere((period) => period.id == firstId);
     final second = periods.indexWhere((period) => period.id == secondId);
     if (first < 0 || second < 0) return firstId.compareTo(secondId);
-    return periods[first].startMinute.compareTo(periods[second].startMinute);
+    return periods[first].sortOrder.compareTo(periods[second].sortOrder);
   }
 }
 

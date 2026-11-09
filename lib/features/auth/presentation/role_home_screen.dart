@@ -679,7 +679,7 @@ class _DashboardState extends State<_Dashboard> {
   SchoolPeriod? _period(int id, _DashboardData d) =>
       d.periods.where((p) => p.id == id).firstOrNull;
   int _periodOrder(TimetableEntry e, _DashboardData d) =>
-      _period(e.periodId, d)?.startMinute ?? 0;
+      _period(e.periodId, d)?.sortOrder ?? 0;
 }
 
 class _Metric {
