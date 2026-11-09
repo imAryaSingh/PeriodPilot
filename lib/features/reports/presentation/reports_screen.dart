@@ -68,10 +68,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
           return const Center(child: CircularProgressIndicator());
         }
         final data = snapshot.data!;
-        final rows = _rows(data);
         final isTeacher =
             context.read<LocalAuthController>().profile?.role ==
             UserRole.teacher;
+        final report = isTeacher ? _Report.teacher : _selected;
+        final rows = _rows(data, report);
         return ListView(
           padding: const EdgeInsets.all(20),
           children: [
@@ -110,7 +111,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
             const SizedBox(height: 18),
             DropdownButtonFormField<_Report>(
-              initialValue: _selected,
+              initialValue: report,
               decoration: const InputDecoration(
                 labelText: 'Report type',
                 border: OutlineInputBorder(),
@@ -121,21 +122,21 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     (r) => DropdownMenuItem(value: r, child: Text(_label(r))),
                   )
                   .toList(),
-              onChanged: (v) => setState(() => _selected = v ?? _Report.daily),
+              onChanged: (v) => setState(() => _selected = v ?? report),
             ),
-            if (_selected == _Report.daily || _selected == _Report.monthly) ...[
+            if (report == _Report.daily || report == _Report.monthly) ...[
               const SizedBox(height: 12),
               OutlinedButton.icon(
                 onPressed: _pickDate,
                 icon: const Icon(Icons.calendar_month_rounded),
                 label: Text(
-                  _selected == _Report.daily
+                  report == _Report.daily
                       ? 'Date: ${schoolDateKey(_date)}'
                       : 'Month: ${_month(_date.month)} ${_date.year}',
                 ),
               ),
             ],
-            if (_selected == _Report.teacher && !isTeacher) ...[
+            if (report == _Report.teacher && !isTeacher) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<int>(
                 initialValue: _teacherId,
@@ -159,14 +160,14 @@ class _ReportsScreenState extends State<ReportsScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    '${_label(_selected)} · ${rows.length} records',
+                    '${_label(report)} · ${rows.length} records',
                     style: Theme.of(context).textTheme.titleLarge,
                   ),
                 ),
                 FilledButton.icon(
                   onPressed: rows.isEmpty || _sharing
                       ? null
-                      : () => _export(rows),
+                      : () => _export(rows, report),
                   icon: _sharing
                       ? const SizedBox(
                           width: 16,
@@ -184,7 +185,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Text(
-                    _selected == _Report.teacher &&
+                    report == _Report.teacher &&
                             _teacherId == null &&
                             !isTeacher
                         ? 'Select a teacher to view their duties.'
@@ -199,7 +200,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
                     (r) => Card(
                       child: ListTile(
                         leading: Icon(
-                          _selected == _Report.absence
+                          report == _Report.absence
                               ? Icons.event_busy_rounded
                               : Icons.assessment_outlined,
                         ),
@@ -239,7 +240,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
     }
   }
 
-  List<List<String>> _rows(_ReportData d) {
+  List<List<String>> _rows(_ReportData d, _Report report) {
     final profile = context.read<LocalAuthController>().profile;
     final own = d.teachers
         .where(
@@ -249,7 +250,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         )
         .firstOrNull;
     final rows = <List<String>>[];
-    if (_selected == _Report.absence) {
+    if (report == _Report.absence) {
       for (final a in d.absences) {
         final t = d.teacher(a.teacherId);
         rows.add([
@@ -259,7 +260,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
           a.notes,
         ]);
       }
-    } else if (_selected == _Report.workload) {
+    } else if (report == _Report.workload) {
       final counts = <int, int>{};
       for (final a in d.assignments.where(
         (x) => x.status == SubstitutionStatus.assigned,
@@ -281,16 +282,16 @@ class _ReportsScreenState extends State<ReportsScreen> {
       Iterable<SubstitutionAssignment> values = d.assignments.where(
         (a) => a.status == SubstitutionStatus.assigned,
       );
-      if (_selected == _Report.daily) {
+      if (report == _Report.daily) {
         final key = schoolDateKey(_date);
         values = values.where((a) => a.dateKey == key);
       }
-      if (_selected == _Report.monthly) {
+      if (report == _Report.monthly) {
         values = values.where(
           (a) => a.date.year == _date.year && a.date.month == _date.month,
         );
       }
-      if (_selected == _Report.teacher) {
+      if (report == _Report.teacher) {
         final id = profile?.role == UserRole.teacher ? own?.id : _teacherId;
         if (id == null) return const [];
         values = values.where((a) => a.substituteTeacherId == id);
@@ -314,10 +315,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
     return rows;
   }
 
-  Future<void> _export(List<List<String>> rows) async {
+  Future<void> _export(List<List<String>> rows, _Report report) async {
     setState(() => _sharing = true);
     try {
-      final headers = switch (_selected) {
+      final headers = switch (report) {
         _Report.absence => ['Date', 'Teacher', 'Type', 'Notes'],
         _Report.workload => [
           'Substitution duties',
@@ -339,7 +340,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
         headers,
         ...rows,
       ].map((row) => row.map(_csvCell).join(',')).join('\r\n');
-      final name = '${_selected.name}_${schoolDateKey(_date)}.csv';
+      final name = '${report.name}_${schoolDateKey(_date)}.csv';
       await SharePlus.instance.share(
         ShareParams(
           files: [
@@ -350,7 +351,7 @@ class _ReportsScreenState extends State<ReportsScreen> {
             ),
           ],
           fileNameOverrides: [name],
-          subject: '${_label(_selected)} report',
+          subject: '${_label(report)} report',
         ),
       );
     } catch (error) {
@@ -371,7 +372,11 @@ class _ReportsScreenState extends State<ReportsScreen> {
     _Report.absence => 'Teacher absence report',
     _Report.workload => 'Workload distribution',
   };
-  String _csvCell(String value) => '"${value.replaceAll('"', '""')}"';
+  String _csvCell(String value) {
+    // CSV quoting alone does not stop spreadsheet formula evaluation.
+    final safe = RegExp(r'^[\s]*[=+\-@]').hasMatch(value) ? "'$value" : value;
+    return '"${safe.replaceAll('"', '""')}"';
+  }
 }
 
 class _ReportData {

@@ -269,6 +269,12 @@ class _DashboardState extends State<_Dashboard> {
         const Color(0xFFF0A078),
       ),
       _Metric(
+        'Available today',
+        '${d.teachers.where((t) => t.isActive && !d.absences.any((a) => a.teacherId == t.id)).length}',
+        Icons.person_outline_rounded,
+        const Color(0xFF75D9B8),
+      ),
+      _Metric(
         'Duties today',
         '${activeAssignments.length}',
         Icons.swap_horiz_rounded,
