@@ -594,28 +594,6 @@ class LocalSchoolDatabase implements SchoolDatabase {
   @override
   Future<void> saveTimetableEntry(TimetableEntry entry) async {
     final db = await database;
-    final conflicts = await db.query(
-      'timetable_entries',
-      where: 'day_of_week = ? AND period_id = ? AND id != COALESCE(?, -1)',
-      whereArgs: [entry.dayOfWeek, entry.periodId, entry.id],
-    );
-    for (final row in conflicts) {
-      final sameClass =
-          row['class_id'] == entry.classId &&
-          (row['section_id'] == entry.sectionId ||
-              row['section_id'] == null ||
-              entry.sectionId == null);
-      if (sameClass) {
-        throw const DuplicateSchoolRecordException(
-          'This class or section already has a lesson during that period.',
-        );
-      }
-      if (row['teacher_id'] == entry.teacherId) {
-        throw const DuplicateSchoolRecordException(
-          'This teacher is already assigned during that period.',
-        );
-      }
-    }
     final values = {
       'class_id': entry.classId,
       'section_id': entry.sectionId,
@@ -625,21 +603,44 @@ class LocalSchoolDatabase implements SchoolDatabase {
       'day_of_week': entry.dayOfWeek,
       'room': entry.room.trim(),
     };
-    if (entry.id == null) {
-      await db.insert('timetable_entries', values);
-    } else {
-      await db.update(
+    await db.transaction((txn) async {
+      final conflicts = await txn.query(
         'timetable_entries',
-        values,
-        where: 'id = ?',
-        whereArgs: [entry.id],
+        where: 'day_of_week = ? AND period_id = ? AND id != COALESCE(?, -1)',
+        whereArgs: [entry.dayOfWeek, entry.periodId, entry.id],
       );
-    }
+      validateTimetableEntryConflicts(
+        conflicts.map(TimetableEntry.fromMap),
+        entry,
+      );
+      if (entry.id == null) {
+        await txn.insert('timetable_entries', values);
+      } else {
+        await txn.update(
+          'timetable_entries',
+          values,
+          where: 'id = ?',
+          whereArgs: [entry.id],
+        );
+      }
+    });
   }
 
   @override
   Future<void> deleteTimetableEntry(int id) async {
     final db = await database;
+    final assignments = await db.query(
+      'substitutions',
+      columns: ['id'],
+      where: 'timetable_entry_id = ?',
+      whereArgs: [id],
+      limit: 1,
+    );
+    if (assignments.isNotEmpty) {
+      throw const SchoolDataException(
+        'This lesson has substitution history. Keep it in the timetable to preserve those records.',
+      );
+    }
     await db.delete('timetable_entries', where: 'id = ?', whereArgs: [id]);
   }
 

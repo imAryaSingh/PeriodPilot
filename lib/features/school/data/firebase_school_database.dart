@@ -517,29 +517,12 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     final collection = await _collection('timetables');
     final id = entry.id ?? _newId();
     final existing = await collection.get();
-    for (final doc in existing.docs) {
-      final data = doc.data();
-      if (data['id'] == id) continue;
-      if (data['dayOfWeek'] != entry.dayOfWeek ||
-          data['periodId'] != entry.periodId) {
-        continue;
-      }
-      final sameClass =
-          data['classId'] == entry.classId &&
-          (data['sectionId'] == entry.sectionId ||
-              data['sectionId'] == null ||
-              entry.sectionId == null);
-      if (sameClass) {
-        throw const DuplicateSchoolRecordException(
-          'This class or section already has a lesson during that period.',
-        );
-      }
-      if (data['teacherId'] == entry.teacherId) {
-        throw const DuplicateSchoolRecordException(
-          'This teacher is already assigned during that period.',
-        );
-      }
-    }
+    validateTimetableEntryConflicts(
+      existing.docs
+          .map((doc) => TimetableEntry.fromMap(doc.data()))
+          .where((existingEntry) => existingEntry.id != id),
+      entry,
+    );
     await collection.doc('$id').set({
       'id': id,
       'classId': entry.classId,
@@ -555,6 +538,14 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
 
   @override
   Future<void> deleteTimetableEntry(int id) async {
+    final assignments = await (await _collection(
+      'substitutions',
+    )).where('timetableEntryId', isEqualTo: id).limit(1).get();
+    if (assignments.docs.isNotEmpty) {
+      throw const SchoolDataException(
+        'This lesson has substitution history. Keep it in the timetable to preserve those records.',
+      );
+    }
     await (await _collection('timetables')).doc('$id').delete();
   }
 

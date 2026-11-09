@@ -1151,62 +1151,62 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                   message:
                       'Configure the school periods before adding lessons.',
                 )
-              : entries.isEmpty
-              ? const _EmptyPanel(
-                  icon: Icons.event_note_outlined,
-                  title: 'No lessons for this day',
-                  message: 'Use Add lesson to build this timetable.',
-                )
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-                  itemCount: entries.length,
+                  itemCount: activePeriods.length,
                   itemBuilder: (context, index) {
-                    final entry = entries[index];
-                    final period = _findById(activePeriods, entry.periodId);
-                    final teacher = _findById(data.teachers, entry.teacherId);
-                    final subject = _findById(data.subjects, entry.subjectId);
-                    final schoolClass = _findById(data.classes, entry.classId);
-                    final section = entry.sectionId == null
-                        ? null
-                        : data.sectionNames[entry.sectionId];
+                    final period = activePeriods[index];
+                    final lessons = entries
+                        .where((entry) => entry.periodId == period.id)
+                        .toList();
                     return Card(
-                      child: ListTile(
-                        leading: CircleAvatar(
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.primaryContainer,
-                          foregroundColor: Theme.of(
-                            context,
-                          ).colorScheme.onPrimaryContainer,
-                          child: Text('${index + 1}'),
-                        ),
-                        title: Text(subject?.name ?? 'Subject unavailable'),
-                        subtitle: Text(
-                          [
-                            if (_view == _TimetableView.teacherView)
-                              '${schoolClass?.name ?? 'Class'}${section == null ? '' : ' · $section'}',
-                            if (_view == _TimetableView.classView)
-                              teacher?.fullName ?? 'Teacher unavailable',
-                            if (_view == _TimetableView.classView &&
-                                section != null)
-                              section,
-                            if (entry.room.isNotEmpty) 'Room ${entry.room}',
-                            if (period != null)
-                              '${_formatMinute(period.startMinute)}–${_formatMinute(period.endMinute)}',
-                          ].join(' · '),
-                        ),
-                        trailing: Wrap(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 8),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            IconButton(
-                              tooltip: 'Edit lesson',
-                              onPressed: () => _openEditor(entry),
-                              icon: const Icon(Icons.edit_outlined),
+                            ListTile(
+                              leading: CircleAvatar(
+                                backgroundColor: Theme.of(
+                                  context,
+                                ).colorScheme.primaryContainer,
+                                foregroundColor: Theme.of(
+                                  context,
+                                ).colorScheme.onPrimaryContainer,
+                                child: Text('${index + 1}'),
+                              ),
+                              title: Text(period.name),
+                              subtitle: Text(
+                                '${_formatMinute(period.startMinute)} – ${_formatMinute(period.endMinute)}',
+                              ),
+                              trailing: lessons.isEmpty
+                                  ? const Chip(label: Text('Free period'))
+                                  : null,
                             ),
-                            IconButton(
-                              tooltip: 'Remove lesson',
-                              onPressed: () => _delete(entry),
-                              icon: const Icon(Icons.delete_outline_rounded),
-                            ),
+                            if (lessons.isEmpty)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  72,
+                                  0,
+                                  16,
+                                  8,
+                                ),
+                                child: Text(
+                                  _view == _TimetableView.teacherView
+                                      ? 'No class assigned during this period.'
+                                      : 'No lesson assigned during this period.',
+                                  style: Theme.of(context).textTheme.bodySmall
+                                      ?.copyWith(
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
+                                      ),
+                                ),
+                              )
+                            else
+                              ...lessons.map(
+                                (entry) => _lessonTile(entry, data),
+                              ),
                           ],
                         ),
                       ),
@@ -1215,6 +1215,43 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                 ),
         ),
       ],
+    );
+  }
+
+  Widget _lessonTile(TimetableEntry entry, _TimetableData data) {
+    final teacher = _findById(data.teachers, entry.teacherId);
+    final subject = _findById(data.subjects, entry.subjectId);
+    final schoolClass = _findById(data.classes, entry.classId);
+    final section = entry.sectionId == null
+        ? null
+        : data.sectionNames[entry.sectionId];
+    final details = <String>[
+      if (_view == _TimetableView.teacherView)
+        '${schoolClass?.name ?? 'Class'}${section == null ? '' : ' · $section'}',
+      if (_view == _TimetableView.classView)
+        teacher?.fullName ?? 'Teacher unavailable',
+      if (_view == _TimetableView.classView && section != null) section,
+      if (entry.room.isNotEmpty) 'Room ${entry.room}',
+    ];
+    return ListTile(
+      dense: true,
+      contentPadding: const EdgeInsets.only(left: 72, right: 12),
+      title: Text(subject?.name ?? 'Subject unavailable'),
+      subtitle: details.isEmpty ? null : Text(details.join(' · ')),
+      trailing: Wrap(
+        children: [
+          IconButton(
+            tooltip: 'Edit lesson',
+            onPressed: () => _openEditor(entry),
+            icon: const Icon(Icons.edit_outlined),
+          ),
+          IconButton(
+            tooltip: 'Remove lesson',
+            onPressed: () => _delete(entry),
+            icon: const Icon(Icons.delete_outline_rounded),
+          ),
+        ],
+      ),
     );
   }
 

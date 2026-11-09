@@ -77,3 +77,31 @@ void validateSchoolPeriodConfiguration(List<SchoolPeriod> periods) {
     }
   }
 }
+
+void validateTimetableEntryConflicts(
+  Iterable<TimetableEntry> existingEntries,
+  TimetableEntry candidate,
+) {
+  for (final existing in existingEntries) {
+    if ((candidate.id != null && existing.id == candidate.id) ||
+        existing.dayOfWeek != candidate.dayOfWeek ||
+        existing.periodId != candidate.periodId) {
+      continue;
+    }
+    final sameClassAndSection =
+        existing.classId == candidate.classId &&
+        (existing.sectionId == candidate.sectionId ||
+            existing.sectionId == null ||
+            candidate.sectionId == null);
+    if (sameClassAndSection) {
+      throw const DuplicateSchoolRecordException(
+        'This class or section already has a lesson during that period.',
+      );
+    }
+    if (existing.teacherId == candidate.teacherId) {
+      throw const DuplicateSchoolRecordException(
+        'This teacher is already assigned during that period.',
+      );
+    }
+  }
+}
