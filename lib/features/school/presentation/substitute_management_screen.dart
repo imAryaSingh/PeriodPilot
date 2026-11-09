@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../data/school_database.dart';
 import '../domain/school_models.dart';
+import '../domain/substitute_suggestions.dart';
 
 class SubstituteManagementScreen extends StatefulWidget {
   const SubstituteManagementScreen({super.key});
@@ -71,56 +72,23 @@ class _SubstituteManagementScreenState
     TeacherAbsence absence, [
     SubstitutionAssignment? existing,
   ]) async {
-    final todayAbsences = data.absences
-        .where((a) => a.dateKey == schoolDateKey(_date))
-        .map((a) => a.teacherId)
-        .toSet();
-    final currentDayLoad = <int, int>{};
-    for (final a in data.assignments.where(
-      (a) =>
-          a.dateKey == schoolDateKey(_date) &&
-          a.status == SubstitutionStatus.assigned &&
-          a.id != existing?.id,
-    )) {
-      currentDayLoad.update(
-        a.substituteTeacherId,
-        (v) => v + 1,
-        ifAbsent: () => 1,
-      );
-    }
-    final subjectTeacherLoad = <int, int>{};
-    for (final e in data.entries.where(
-      (e) => e.subjectId == lesson.subjectId,
-    )) {
-      subjectTeacherLoad.update(e.teacherId, (v) => v + 1, ifAbsent: () => 1);
-    }
-    final candidates =
-        data.teachers
-            .where(
-              (t) =>
-                  t.isActive &&
-                  t.id != absence.teacherId &&
-                  !todayAbsences.contains(t.id),
-            )
-            .toList()
-          ..sort((a, b) {
-            int rank(Teacher t) =>
-                (data.entries.any(
-                      (e) =>
-                          e.teacherId == t.id &&
-                          e.dayOfWeek == _date.weekday &&
-                          e.periodId == lesson.periodId,
-                    )
-                    ? 10000
-                    : 0) +
-                (currentDayLoad[t.id] ?? 0) * 100 -
-                (subjectTeacherLoad[t.id] ?? 0);
-            return rank(a).compareTo(rank(b));
-          });
-    if (candidates.isEmpty) {
+    final suggestions = suggestSubstituteTeachers(
+      teachers: data.teachers,
+      timetable: data.entries,
+      absences: data.absences,
+      assignments: data.assignments,
+      absentTeacherId: absence.teacherId,
+      periodId: lesson.periodId,
+      dayOfWeek: _date.weekday,
+      date: _date,
+      subjectId: lesson.subjectId,
+      replacingAssignmentId: existing?.id,
+    );
+    if (suggestions.isEmpty) {
       _message('No active teachers are available to consider for this date.');
       return;
     }
+
     final selected = await showDialog<Teacher>(
       context: context,
       builder: (dialogContext) => AlertDialog(
@@ -137,38 +105,28 @@ class _SubstituteManagementScreenState
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 12),
-              for (final teacher in candidates) ...[
+              for (final suggestion in suggestions)
                 Builder(
                   builder: (context) {
-                    final busy = data.entries.any(
-                      (e) =>
-                          e.teacherId == teacher.id &&
-                          e.dayOfWeek == _date.weekday &&
-                          e.periodId == lesson.periodId,
-                    );
-                    final dutyConflict = data.assignments.any(
-                      (a) =>
-                          a.substituteTeacherId == teacher.id &&
-                          a.dateKey == schoolDateKey(_date) &&
-                          a.periodId == lesson.periodId &&
-                          a.status == SubstitutionStatus.assigned &&
-                          a.id != existing?.id,
-                    );
-                    final blocked = dutyConflict;
-                    final matches = subjectTeacherLoad[teacher.id] ?? 0;
-                    final load = currentDayLoad[teacher.id] ?? 0;
-                    final detail = blocked
-                        ? 'Already assigned another duty in this period'
-                        : '${busy
-                              ? 'Regular class · override available '
-                              : load >= 2
-                              ? 'Daily recommendation threshold · confirm override · '
-                              : matches > 0
-                              ? 'Subject experience · '
-                              : ''}${load == 0 ? 'No duties today' : '$load duties today'}';
+                    final teacher = suggestion.teacher;
+                    final detail = <String>[
+                      if (suggestion.hasDutyConflict)
+                        'Already assigned another duty in this period'
+                      else if (suggestion.isOccupied)
+                        'Regular class · administrator override required'
+                      else if (suggestion.dutiesToday >=
+                          defaultMaximumDailySubstitutions)
+                        'Daily suggestion limit · administrator override required',
+                      if (suggestion.hasSubjectExperience) 'Subject experience',
+                      suggestion.dutiesToday == 0
+                          ? 'No duties today'
+                          : '${suggestion.dutiesToday} duties today',
+                      if (suggestion.priorDuties > 0)
+                        '${suggestion.priorDuties} prior assigned duties',
+                    ].join(' · ');
                     return ListTile(
                       dense: true,
-                      enabled: !blocked,
+                      enabled: !suggestion.hasDutyConflict,
                       leading: CircleAvatar(
                         child: Text(
                           teacher.fullName.isEmpty
@@ -178,44 +136,40 @@ class _SubstituteManagementScreenState
                       ),
                       title: Text(teacher.fullName),
                       subtitle: Text(detail),
-                      trailing: blocked
+                      trailing: suggestion.hasDutyConflict
                           ? const Icon(Icons.block_outlined)
                           : Icon(
-                              busy
+                              suggestion.requiresOverride
                                   ? Icons.warning_amber_rounded
                                   : Icons.add_circle_outline_rounded,
                             ),
-                      onTap: blocked
+                      onTap: suggestion.hasDutyConflict
                           ? null
                           : () async {
-                              if (busy ||
-                                  (currentDayLoad[teacher.id] ?? 0) >= 2) {
-                                final loadOverride = !busy;
+                              if (suggestion.requiresOverride) {
                                 final confirm = await showDialog<bool>(
                                   context: dialogContext,
-                                  builder: (ctx) => AlertDialog(
+                                  builder: (confirmContext) => AlertDialog(
                                     title: const Text(
                                       'Confirm workload override?',
                                     ),
                                     content: Text(
-                                      busy
+                                      suggestion.isOccupied
                                           ? '${teacher.fullName} has a regular class during this period. Continue with an administrator override?'
-                                          : '${teacher.fullName} already has ${currentDayLoad[teacher.id]} substitution duties today. Continue with an administrator override?',
+                                          : '${teacher.fullName} already has ${suggestion.dutiesToday} substitution duties today. Continue with an administrator override?',
                                     ),
                                     actions: [
                                       TextButton(
-                                        onPressed: () =>
-                                            Navigator.pop(ctx, false),
+                                        onPressed: () => Navigator.pop(
+                                          confirmContext,
+                                          false,
+                                        ),
                                         child: const Text('Choose another'),
                                       ),
                                       FilledButton(
                                         onPressed: () =>
-                                            Navigator.pop(ctx, true),
-                                        child: Text(
-                                          loadOverride
-                                              ? 'Confirm override'
-                                              : 'Override',
-                                        ),
+                                            Navigator.pop(confirmContext, true),
+                                        child: const Text('Confirm override'),
                                       ),
                                     ],
                                   ),
@@ -229,7 +183,6 @@ class _SubstituteManagementScreenState
                     );
                   },
                 ),
-              ],
             ],
           ),
         ),
@@ -242,12 +195,10 @@ class _SubstituteManagementScreenState
       ),
     );
     if (selected == null || !mounted) return;
+
     try {
-      final busy = data.entries.any(
-        (e) =>
-            e.teacherId == selected.id &&
-            e.dayOfWeek == _date.weekday &&
-            e.periodId == lesson.periodId,
+      final selectedSuggestion = suggestions.firstWhere(
+        (suggestion) => suggestion.teacher.id == selected.id,
       );
       await context.read<SchoolDatabase>().saveSubstitution(
         SubstitutionAssignment(
@@ -261,7 +212,7 @@ class _SubstituteManagementScreenState
           subjectId: lesson.subjectId,
           periodId: lesson.periodId,
           room: lesson.room,
-          isOverride: busy || (currentDayLoad[selected.id] ?? 0) >= 2,
+          isOverride: selectedSuggestion.requiresOverride,
           status: SubstitutionStatus.assigned,
         ),
       );
