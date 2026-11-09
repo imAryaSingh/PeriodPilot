@@ -100,7 +100,7 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
       builder: (dialogContext) => AlertDialog(
         title: const Text('Cancel absence record?'),
         content: Text(
-          'Remove the ${absence.type.label.toLowerCase()} record for ${teacher?.fullName ?? 'this teacher'}?',
+          'Remove the ${absence.type.label.toLowerCase()} record for ${teacher?.fullName ?? 'this teacher'}? If substitute assignments are active for this date, cancel them first.',
         ),
         actions: [
           TextButton(
@@ -303,10 +303,10 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
         )
         .toList();
     entries.sort(
-      (a, b) => _periodStart(
+      (a, b) => _periodOrder(
         data,
         a.periodId,
-      ).compareTo(_periodStart(data, b.periodId)),
+      ).compareTo(_periodOrder(data, b.periodId)),
     );
     return entries.map((entry) {
       final period = _findById(data.periods, entry.periodId);
@@ -328,8 +328,8 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
     }).toList();
   }
 
-  int _periodStart(_AbsenceData data, int periodId) =>
-      _findById(data.periods, periodId)?.startMinute ?? periodId;
+  int _periodOrder(_AbsenceData data, int periodId) =>
+      _findById(data.periods, periodId)?.sortOrder ?? periodId;
 }
 
 class _AbsenceData {

@@ -658,18 +658,6 @@ class LocalSchoolDatabase implements SchoolDatabase {
   Future<void> saveAbsence(TeacherAbsence absence) async {
     final db = await database;
     final date = schoolDateKey(absence.date);
-    final duplicate = await db.query(
-      'attendance_records',
-      columns: ['id'],
-      where: 'teacher_id = ? AND date = ? AND id != COALESCE(?, -1)',
-      whereArgs: [absence.teacherId, date, absence.id],
-      limit: 1,
-    );
-    if (duplicate.isNotEmpty) {
-      throw const DuplicateSchoolRecordException(
-        'This teacher already has an absence record for that date.',
-      );
-    }
     final now = DateTime.now().toUtc().toIso8601String();
     final values = {
       'teacher_id': absence.teacherId,
@@ -678,22 +666,78 @@ class LocalSchoolDatabase implements SchoolDatabase {
       'notes': absence.notes.trim(),
       'updated_at': now,
     };
-    if (absence.id == null) {
-      await db.insert('attendance_records', {...values, 'created_at': now});
-    } else {
-      await db.update(
+    await db.transaction((txn) async {
+      final duplicate = await txn.query(
         'attendance_records',
-        values,
-        where: 'id = ?',
-        whereArgs: [absence.id],
+        columns: ['id'],
+        where: 'teacher_id = ? AND date = ? AND id != COALESCE(?, -1)',
+        whereArgs: [absence.teacherId, date, absence.id],
+        limit: 1,
       );
-    }
+      if (duplicate.isNotEmpty) {
+        throw const DuplicateSchoolRecordException(
+          'This teacher already has an absence record for that date.',
+        );
+      }
+      if (absence.id != null) {
+        final oldRows = await txn.query(
+          'attendance_records',
+          where: 'id = ?',
+          whereArgs: [absence.id],
+          limit: 1,
+        );
+        if (oldRows.isNotEmpty) {
+          final previous = TeacherAbsence.fromMap(oldRows.single);
+          final assignments = await txn.query(
+            'substitutions',
+            where: 'absent_teacher_id = ? AND date = ? AND status = ?',
+            whereArgs: [previous.teacherId, previous.dateKey, 'assigned'],
+          );
+          validateAbsenceChangeAgainstAssignments(
+            previous,
+            absence,
+            assignments.map(SubstitutionAssignment.fromMap),
+          );
+        }
+      }
+      if (absence.id == null) {
+        await txn.insert('attendance_records', {...values, 'created_at': now});
+      } else {
+        await txn.update(
+          'attendance_records',
+          values,
+          where: 'id = ?',
+          whereArgs: [absence.id],
+        );
+      }
+    });
   }
 
   @override
   Future<void> deleteAbsence(int id) async {
     final db = await database;
-    await db.delete('attendance_records', where: 'id = ?', whereArgs: [id]);
+    await db.transaction((txn) async {
+      final oldRows = await txn.query(
+        'attendance_records',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (oldRows.isNotEmpty) {
+        final previous = TeacherAbsence.fromMap(oldRows.single);
+        final assignments = await txn.query(
+          'substitutions',
+          where: 'absent_teacher_id = ? AND date = ? AND status = ?',
+          whereArgs: [previous.teacherId, previous.dateKey, 'assigned'],
+        );
+        validateAbsenceChangeAgainstAssignments(
+          previous,
+          null,
+          assignments.map(SubstitutionAssignment.fromMap),
+        );
+      }
+      await txn.delete('attendance_records', where: 'id = ?', whereArgs: [id]);
+    });
   }
 
   @override

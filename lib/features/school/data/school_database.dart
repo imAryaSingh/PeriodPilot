@@ -105,3 +105,27 @@ void validateTimetableEntryConflicts(
     }
   }
 }
+
+void validateAbsenceChangeAgainstAssignments(
+  TeacherAbsence previous,
+  TeacherAbsence? updated,
+  Iterable<SubstitutionAssignment> assignments,
+) {
+  final removesAbsenceContext =
+      updated == null ||
+      updated.teacherId != previous.teacherId ||
+      updated.dateKey != previous.dateKey;
+  if (!removesAbsenceContext) return;
+
+  final hasActiveAssignments = assignments.any(
+    (assignment) =>
+        assignment.status == SubstitutionStatus.assigned &&
+        assignment.absentTeacherId == previous.teacherId &&
+        assignment.dateKey == previous.dateKey,
+  );
+  if (hasActiveAssignments) {
+    throw const SchoolDataException(
+      'Cancel active substitute assignments for this teacher and date before changing or removing the absence.',
+    );
+  }
+}

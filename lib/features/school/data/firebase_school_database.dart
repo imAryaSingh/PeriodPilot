@@ -581,6 +581,26 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     }
     final ref = collection.doc('$id');
     final old = await ref.get();
+    if (old.exists) {
+      final previous = TeacherAbsence.fromMap(old.data()!);
+      if (previous.teacherId != absence.teacherId ||
+          previous.dateKey != dateKey) {
+        final assignmentSnapshot = await (await _collection(
+          'substitutions',
+        )).where('absentTeacherId', isEqualTo: previous.teacherId).get();
+        validateAbsenceChangeAgainstAssignments(
+          previous,
+          absence,
+          assignmentSnapshot.docs
+              .map((doc) => SubstitutionAssignment.fromMap(doc.data()))
+              .where(
+                (assignment) =>
+                    assignment.dateKey == previous.dateKey &&
+                    assignment.status == SubstitutionStatus.assigned,
+              ),
+        );
+      }
+    }
     await ref.set({
       'id': id,
       'teacherId': absence.teacherId,
@@ -594,7 +614,27 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
 
   @override
   Future<void> deleteAbsence(int id) async {
-    await (await _collection('attendance')).doc('$id').delete();
+    final ref = (await _collection('attendance')).doc('$id');
+    final snapshot = await ref.get();
+    final data = snapshot.data();
+    if (data != null) {
+      final previous = TeacherAbsence.fromMap(data);
+      final assignmentSnapshot = await (await _collection(
+        'substitutions',
+      )).where('absentTeacherId', isEqualTo: previous.teacherId).get();
+      validateAbsenceChangeAgainstAssignments(
+        previous,
+        null,
+        assignmentSnapshot.docs
+            .map((doc) => SubstitutionAssignment.fromMap(doc.data()))
+            .where(
+              (assignment) =>
+                  assignment.dateKey == previous.dateKey &&
+                  assignment.status == SubstitutionStatus.assigned,
+            ),
+      );
+    }
+    await ref.delete();
   }
 
   @override
