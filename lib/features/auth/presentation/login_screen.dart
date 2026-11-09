@@ -16,7 +16,9 @@ class _LoginScreenState extends State<LoginScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _obscurePassword = true;
+  bool _isSendingReset = false;
   String? _errorMessage;
+  String? _statusMessage;
 
   @override
   void dispose() {
@@ -27,7 +29,10 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
-    setState(() => _errorMessage = null);
+    setState(() {
+      _errorMessage = null;
+      _statusMessage = null;
+    });
     try {
       await context.read<LocalAuthController>().signIn(
         email: _emailController.text,
@@ -35,6 +40,39 @@ class _LoginScreenState extends State<LoginScreen> {
       );
     } catch (error) {
       if (mounted) setState(() => _errorMessage = error.toString());
+    }
+  }
+
+  Future<void> _sendPasswordReset() async {
+    final email = _emailController.text.trim();
+    if (!RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
+      setState(() {
+        _statusMessage = null;
+        _errorMessage = email.isEmpty
+            ? 'Enter your email address first.'
+            : 'Enter a valid email address.';
+      });
+      return;
+    }
+    if (_isSendingReset) return;
+
+    setState(() {
+      _isSendingReset = true;
+      _errorMessage = null;
+      _statusMessage = null;
+    });
+    try {
+      await context.read<LocalAuthController>().sendPasswordReset(email);
+      if (!mounted) return;
+      setState(() {
+        _statusMessage =
+            'If a Firebase account exists for this email, reset instructions '
+            'have been sent. Check your inbox and spam folder.';
+      });
+    } catch (error) {
+      if (mounted) setState(() => _errorMessage = error.toString());
+    } finally {
+      if (mounted) setState(() => _isSendingReset = false);
     }
   }
 
@@ -57,9 +95,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Container(
-                      width: 68,
-                      height: 68,
-                      alignment: Alignment.center,
+                      padding: const EdgeInsets.all(14),
                       decoration: BoxDecoration(
                         gradient: LinearGradient(
                           begin: Alignment.topLeft,
@@ -70,6 +106,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           ],
                         ),
                         borderRadius: BorderRadius.circular(22),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: .12),
+                        ),
                         boxShadow: [
                           BoxShadow(
                             color: theme.colorScheme.primary.withValues(
@@ -80,15 +119,33 @@ class _LoginScreenState extends State<LoginScreen> {
                           ),
                         ],
                       ),
-                      child: Icon(
-                        Icons.school_rounded,
-                        size: 34,
-                        color: theme.colorScheme.onPrimary,
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.school_rounded,
+                            size: 34,
+                            color: theme.colorScheme.onPrimary,
+                          ),
+                          const SizedBox(width: 12),
+                          Flexible(
+                            child: Text(
+                              'PeriodPilot',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: theme.textTheme.titleLarge?.copyWith(
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: -.35,
+                                color: theme.colorScheme.onPrimary,
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 18),
                     Text(
-                      'PeriodPilot by StackSeed',
+                      'by StackSeed',
                       style: theme.textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.w700,
                         letterSpacing: -.25,
@@ -161,6 +218,47 @@ class _LoginScreenState extends State<LoginScreen> {
                       validator: (value) =>
                           (value ?? '').isEmpty ? 'Enter your password' : null,
                     ),
+                    if (auth.usesFirebase) ...[
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: auth.isBusy || _isSendingReset
+                              ? null
+                              : _sendPasswordReset,
+                          child: _isSendingReset
+                              ? const Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    SizedBox.square(
+                                      dimension: 16,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    ),
+                                    SizedBox(width: 8),
+                                    Text('Sending reset email…'),
+                                  ],
+                                )
+                              : const Text('Forgot password?'),
+                        ),
+                      ),
+                    ],
+                    if (_statusMessage != null) ...[
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: theme.colorScheme.secondaryContainer,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          _statusMessage!,
+                          style: TextStyle(
+                            color: theme.colorScheme.onSecondaryContainer,
+                          ),
+                        ),
+                      ),
+                    ],
                     if (_errorMessage != null) ...[
                       const SizedBox(height: 16),
                       ErrorBanner(message: _errorMessage!),

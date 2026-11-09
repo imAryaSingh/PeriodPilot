@@ -117,6 +117,15 @@ class FirebaseAuthStore {
 
   Future<void> signOut() => _auth.signOut();
 
+  Future<void> sendPasswordResetEmail(String email) async {
+    final normalizedEmail = email.trim().toLowerCase();
+    if (normalizedEmail.isEmpty ||
+        !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(normalizedEmail)) {
+      throw const FirebaseAuthStoreException('Enter a valid email address.');
+    }
+    await _auth.sendPasswordResetEmail(email: normalizedEmail);
+  }
+
   UserProfile _profileFrom(String uid, Map<String, dynamic> data) =>
       UserProfile(
         uid: uid,

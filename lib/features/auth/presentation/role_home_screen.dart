@@ -82,29 +82,6 @@ class _DashboardState extends State<_Dashboard> {
               widget.profile.email.trim().toLowerCase(),
         )
         .firstOrNull;
-    final activeAbsences = absences.map((a) => a.teacherId).toSet();
-    final activePeriods = periods.where((period) => period.isActive);
-    final availableCount = teachers.where((teacher) {
-      if (!teacher.isActive || activeAbsences.contains(teacher.id)) {
-        return false;
-      }
-      return activePeriods.any((period) {
-        final hasRegularClass = entries.any(
-          (entry) =>
-              entry.teacherId == teacher.id &&
-              entry.dayOfWeek == date.weekday &&
-              entry.periodId == period.id,
-        );
-        final hasSubstitution = assignments.any(
-          (assignment) =>
-              assignment.dateKey == today &&
-              assignment.status == SubstitutionStatus.assigned &&
-              assignment.substituteTeacherId == teacher.id &&
-              assignment.periodId == period.id,
-        );
-        return !hasRegularClass && !hasSubstitution;
-      });
-    }).length;
     return _DashboardData(
       teachers: teachers,
       absences: absences,
@@ -117,7 +94,6 @@ class _DashboardState extends State<_Dashboard> {
           if (s.id != null) s.id!: s.name,
       },
       own: own,
-      available: availableCount,
     );
   }
 
@@ -141,18 +117,34 @@ class _DashboardState extends State<_Dashboard> {
       return LayoutBuilder(
         builder: (context, box) {
           final wide = box.maxWidth > 850;
-          return ListView(
-            padding: EdgeInsets.symmetric(
-              horizontal: wide ? 32 : 18,
-              vertical: 22,
-            ),
+          final horizontalPadding = wide ? 32.0 : 18.0;
+          return Column(
             children: [
-              _hero(context, data),
-              const SizedBox(height: 20),
-              if (widget.profile.role == UserRole.teacher)
-                _teacherContent(context, data)
-              else
-                _adminContent(context, data, wide),
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  horizontalPadding,
+                  16,
+                  horizontalPadding,
+                  12,
+                ),
+                child: _hero(context),
+              ),
+              Expanded(
+                child: ListView(
+                  padding: EdgeInsets.fromLTRB(
+                    horizontalPadding,
+                    8,
+                    horizontalPadding,
+                    22,
+                  ),
+                  children: [
+                    if (widget.profile.role == UserRole.teacher)
+                      _teacherContent(context, data)
+                    else
+                      _adminContent(context, data),
+                  ],
+                ),
+              ),
             ],
           );
         },
@@ -160,7 +152,7 @@ class _DashboardState extends State<_Dashboard> {
     },
   );
 
-  Widget _hero(BuildContext context, _DashboardData data) {
+  Widget _hero(BuildContext context) {
     final name = widget.profile.displayName.trim().isEmpty
         ? widget.profile.email
         : widget.profile.displayName;
@@ -195,13 +187,30 @@ class _DashboardState extends State<_Dashboard> {
                   ),
                 ),
                 const SizedBox(height: 8),
-                Text(
-                  subtitle,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  children: [
+                    Text(
+                      subtitle,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyLarge?.copyWith(color: Colors.white70),
+                    ),
+                    if (widget.profile.role == UserRole.administrator)
+                      FilledButton.tonalIcon(
+                        onPressed: () =>
+                            _open(context, const AbsenceManagementScreen()),
+                        icon: const Icon(Icons.person_off_rounded, size: 18),
+                        label: const Text('Mark absent'),
+                        style: FilledButton.styleFrom(
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ),
+                  ],
                 ),
-                const SizedBox(height: 15),
+                const SizedBox(height: 12),
                 _pill(widget.profile.role.label),
               ],
             ),
@@ -223,7 +232,7 @@ class _DashboardState extends State<_Dashboard> {
     );
   }
 
-  Widget _adminContent(BuildContext context, _DashboardData d, bool wide) {
+  Widget _adminContent(BuildContext context, _DashboardData d) {
     final today = schoolDateKey(DateTime.now());
     final activeAssignments = d.assignments
         .where(
@@ -260,12 +269,6 @@ class _DashboardState extends State<_Dashboard> {
         const Color(0xFFF0A078),
       ),
       _Metric(
-        'Available',
-        '${d.available}',
-        Icons.how_to_reg_rounded,
-        const Color(0xFF62D1B1),
-      ),
-      _Metric(
         'Duties today',
         '${activeAssignments.length}',
         Icons.swap_horiz_rounded,
@@ -287,17 +290,26 @@ class _DashboardState extends State<_Dashboard> {
           'Live summary from your school records',
         ),
         const SizedBox(height: 12),
-        Wrap(
-          spacing: 12,
-          runSpacing: 12,
-          children: cards
-              .map(
-                (m) => SizedBox(
-                  width: wide ? 188 : 155,
-                  child: _metricCard(context, m),
-                ),
-              )
-              .toList(),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final columns = ((constraints.maxWidth + 12) / 168).floor().clamp(
+              1,
+              5,
+            );
+            return GridView.builder(
+              shrinkWrap: true,
+              physics: const NeverScrollableScrollPhysics(),
+              itemCount: cards.length,
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: columns,
+                crossAxisSpacing: 12,
+                mainAxisSpacing: 12,
+                mainAxisExtent: 142,
+              ),
+              itemBuilder: (context, index) =>
+                  _metricCard(context, cards[index]),
+            );
+          },
         ),
         const SizedBox(height: 24),
         _sectionTitle(context, 'Quick actions', 'Common administrator tasks'),
@@ -307,12 +319,6 @@ class _DashboardState extends State<_Dashboard> {
             spacing: 10,
             runSpacing: 10,
             children: [
-              _action(
-                context,
-                'Mark teacher absent',
-                Icons.person_off_rounded,
-                () => _open(context, const AbsenceManagementScreen()),
-              ),
               _action(
                 context,
                 'Assign substitute',
@@ -693,7 +699,6 @@ class _DashboardData {
     required this.classes,
     required this.subjects,
     required this.own,
-    required this.available,
   });
   final List<Teacher> teachers;
   final List<TeacherAbsence> absences;
@@ -702,7 +707,6 @@ class _DashboardData {
   final List<SchoolPeriod> periods;
   final Map<int, String> classes, subjects;
   final Teacher? own;
-  final int available;
 }
 
 String _month(int n) => const [

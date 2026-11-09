@@ -107,6 +107,26 @@ class LocalAuthController extends ChangeNotifier {
     });
   }
 
+  Future<void> sendPasswordReset(String email) async {
+    if (!usesFirebase) {
+      throw const LocalAuthException(
+        'Password reset is available for Firebase school accounts only.',
+      );
+    }
+    await _run(() async {
+      try {
+        await firebaseStore!.sendPasswordResetEmail(email);
+      } on FirebaseAuthException catch (error) {
+        if (error.code == 'user-not-found') {
+          throw const FirebaseAuthStoreException(
+            'No Firebase account was found for that email address.',
+          );
+        }
+        throw _firebaseError(error);
+      }
+    });
+  }
+
   Future<void> _run(Future<void> Function() action) async {
     isBusy = true;
     notifyListeners();
