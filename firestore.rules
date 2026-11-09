@@ -1,0 +1,114 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function profile() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function belongsTo(schoolId) {
+      return signedIn() && profile().schoolId == schoolId && profile().active == true;
+    }
+    function isAdmin(schoolId) {
+      return belongsTo(schoolId) && profile().role == 'administrator';
+    }
+    match /users/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.role == 'administrator'
+        && request.resource.data.schoolId is string
+        && getAfter(/databases/$(database)/documents/schools/$(request.resource.data.schoolId)).data.ownerUid == uid;
+      allow update: if signedIn() && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName']);
+      allow delete: if false;
+      match /fcmInstallations/{fid} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['fid', 'platform', 'updatedAt'])
+          && request.resource.data.fid == fid
+          && request.resource.data.platform is string
+          && request.resource.data.updatedAt is timestamp;
+      }
+    }
+    match /schools/{schoolId} {
+      allow create: if signedIn() && request.resource.data.ownerUid == request.auth.uid;
+      allow read: if belongsTo(schoolId);
+      allow update: if isAdmin(schoolId)
+        && request.resource.data.ownerUid == resource.data.ownerUid;
+      allow delete: if false;
+      function assignmentPath(assignmentId) {
+        return /databases/$(database)/documents/schools/$(schoolId)/substitutions/$(assignmentId);
+      }
+      function claimMatchesAssignment(assignment, claim) {
+        return (claim.claimType == 'lesson'
+            && assignment.dateKey == claim.dateKey
+            && assignment.timetableEntryId == claim.timetableEntryId)
+          || (claim.claimType == 'teacherPeriod'
+            && assignment.dateKey == claim.dateKey
+            && assignment.periodId == claim.periodId
+            && assignment.substituteTeacherId == claim.substituteTeacherId);
+      }
+      function claimMatchesAssignmentAfter(assignmentId, claim) {
+        return existsAfter(assignmentPath(assignmentId))
+          && getAfter(assignmentPath(assignmentId)).data.status == 'assigned'
+          && claimMatchesAssignment(getAfter(assignmentPath(assignmentId)).data, claim);
+      }
+      function assignmentClaimsPresent() {
+        let assignment = request.resource.data;
+        let lessonClaim = /databases/$(database)/documents/schools/$(schoolId)/substitutionClaims/$('lesson_' + assignment.dateKey + '_' + string(assignment.timetableEntryId));
+        let teacherClaim = /databases/$(database)/documents/schools/$(schoolId)/substitutionClaims/$('teacher_' + assignment.dateKey + '_' + string(assignment.periodId) + '_' + string(assignment.substituteTeacherId));
+        return existsAfter(lessonClaim)
+          && getAfter(lessonClaim).data.assignmentId == assignment.id
+          && existsAfter(teacherClaim)
+          && getAfter(teacherClaim).data.assignmentId == assignment.id;
+      }
+      function assignmentClaimsRemoved() {
+        let assignment = request.resource.data;
+        let lessonClaim = /databases/$(database)/documents/schools/$(schoolId)/substitutionClaims/$('lesson_' + assignment.dateKey + '_' + string(assignment.timetableEntryId));
+        let teacherClaim = /databases/$(database)/documents/schools/$(schoolId)/substitutionClaims/$('teacher_' + assignment.dateKey + '_' + string(assignment.periodId) + '_' + string(assignment.substituteTeacherId));
+        return !existsAfter(lessonClaim) && !existsAfter(teacherClaim);
+      }
+      match /substitutions/{assignmentId} {
+        allow read: if belongsTo(schoolId);
+        allow create: if isAdmin(schoolId)
+          && request.resource.data.status == 'assigned'
+          && assignmentClaimsPresent();
+        allow update: if isAdmin(schoolId) && (
+          (request.resource.data.status == 'assigned' && assignmentClaimsPresent())
+          || (resource.data.status == 'assigned'
+            && request.resource.data.status == 'cancelled'
+            && assignmentClaimsRemoved())
+        );
+        allow delete: if false;
+      }
+      match /substitutionClaims/{claimId} {
+        allow read: if belongsTo(schoolId);
+        allow create: if isAdmin(schoolId)
+          && claimMatchesAssignmentAfter(request.resource.data.assignmentId, request.resource.data);
+        allow update: if isAdmin(schoolId)
+          && claimMatchesAssignmentAfter(request.resource.data.assignmentId, request.resource.data)
+          && (request.resource.data.assignmentId == resource.data.assignmentId
+            || !existsAfter(assignmentPath(resource.data.assignmentId))
+            || getAfter(assignmentPath(resource.data.assignmentId)).data.status != 'assigned'
+            || !claimMatchesAssignment(getAfter(assignmentPath(resource.data.assignmentId)).data, resource.data));
+        allow delete: if isAdmin(schoolId)
+          && (!existsAfter(assignmentPath(resource.data.assignmentId))
+            || getAfter(assignmentPath(resource.data.assignmentId)).data.status != 'assigned'
+            || !claimMatchesAssignment(getAfter(assignmentPath(resource.data.assignmentId)).data, resource.data));
+      }
+      match /{collection}/{document=**} {
+        allow read: if belongsTo(schoolId) && collection != 'notifications';
+        allow write: if isAdmin(schoolId)
+          && collection in ['teachers', 'classes', 'sections', 'subjects', 'periods', 'timetables', 'attendance'];
+      }
+      match /notifications/{notificationId} {
+        allow read: if belongsTo(schoolId)
+          && (isAdmin(schoolId) || resource.data.recipientUid == request.auth.uid);
+        allow create, delete: if false;
+        allow update: if belongsTo(schoolId)
+          && resource.data.recipientUid == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readAt'])
+          && request.resource.data.readAt is timestamp;
+      }
+    }
+  }
+}

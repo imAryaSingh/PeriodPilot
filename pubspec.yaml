@@ -1,0 +1,31 @@
+name: teacher_substitute
+description: A lightweight teacher substitute management app for schools.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.12.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.2
+  shared_preferences: ^2.5.6
+  cryptography: ^2.9.0
+  sqflite: ^2.4.5
+  sqflite_common_ffi: ^2.4.5
+  path: ^1.9.1
+  firebase_core: ^5.1.0
+  firebase_auth: ^7.0.1
+  cloud_firestore: ^7.1.0
+  firebase_messaging: 17.0.1
+  share_plus: ^13.3.1
+  connectivity_plus: ^7.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
