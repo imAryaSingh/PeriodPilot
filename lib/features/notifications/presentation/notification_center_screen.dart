@@ -248,6 +248,27 @@ class _NotificationCenterScreenState extends State<NotificationCenterScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(item.body),
+              if (item.deliveryStatus == 'no_installations')
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Push was not delivered. Enable alerts on a teacher device.',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.error,
+                    ),
+                  ),
+                )
+              else if (item.deliveryStatus == 'pending' ||
+                  item.deliveryStatus == 'sending')
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Text(
+                    'Push delivery is pending.',
+                    style: theme.textTheme.labelMedium?.copyWith(
+                      color: theme.colorScheme.tertiary,
+                    ),
+                  ),
+                ),
               if (timestamp.isNotEmpty)
                 Padding(
                   padding: const EdgeInsets.only(top: 6),

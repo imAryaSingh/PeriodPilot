@@ -179,12 +179,14 @@ class SchoolNotification {
     required this.body,
     required this.createdAt,
     required this.readAt,
+    required this.deliveryStatus,
   });
   final String id;
   final String title;
   final String body;
   final DateTime? createdAt;
   final DateTime? readAt;
+  final String deliveryStatus;
   bool get isRead => readAt != null;
 
   factory SchoolNotification.fromDocument(
@@ -199,6 +201,7 @@ class SchoolNotification {
       body: data['body'] as String? ?? '',
       createdAt: created is Timestamp ? created.toDate() : null,
       readAt: read is Timestamp ? read.toDate() : null,
+      deliveryStatus: data['deliveryStatus'] as String? ?? 'sent',
     );
   }
 }

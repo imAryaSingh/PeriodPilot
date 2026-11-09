@@ -95,6 +95,8 @@ Before enabling delivery:
 
 Until Functions are deployed and Web has its VAPID key, the notification center is available but push delivery is not active. No service-account credentials are stored in Flutter.
 
+To verify the notification flow after setup, run `npm --prefix functions run lint`, `flutter analyze`, and `flutter test`. Then enable notifications on a teacher account/device, assign a substitute duty from the administrator account, and confirm the notification appears in the teacher's **Notifications** history and as a push alert. In the foreground, the app shows an in-app alert; with the app backgrounded, the platform notification is displayed by FCM. Mark it read and confirm the history updates. If push is unavailable, the notification record reports whether there is no registered device or delivery is pending.
+
 Teacher and subject records can be deactivated and reactivated. Class deletion also removes its sections. Staff IDs, class names, section names within a class, and subject names/codes are checked for duplicates within the school.
 
 To check this module manually, save a school profile, add/edit/deactivate a teacher, add a class and sections, and add/edit/deactivate a subject. Close and reopen the app to confirm the records remain.
