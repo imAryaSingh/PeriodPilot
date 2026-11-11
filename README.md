@@ -80,6 +80,15 @@ After signing in, select **Manage school setup** to edit the school profile and 
 
 Firebase Cloud Firestore persistence is enabled for the Android and web app.
 
+### Offline behavior and verification
+
+- Firestore's persistent cache keeps documents the signed-in user has already loaded on that device/browser. Previously viewed school details and timetable data can therefore be read again without a connection; data never loaded on that device is not available offline.
+- The app-wide offline banner follows the device's network-interface status. A connected Wi-Fi or mobile interface does not guarantee that the internet or Firebase is reachable.
+- Firestore queues supported ordinary document writes and synchronizes them when connectivity returns. Substitution assignment creation, reassignment, and cancellation are deliberately online-only: they read current server state and use a transaction with uniqueness claims. An offline or stale client is rejected instead of overwriting a newer assignment.
+- Firestore remains the source of truth. Clearing browser/app storage removes that device's cached copy but does not delete records stored in the school's Firestore database.
+
+To verify offline behavior on Android or web, sign in while online, open the dashboard and timetable so their records are cached, then disconnect the device/network. Confirm the offline banner appears and previously loaded screens still show data. Try to create or cancel a substitution and confirm the operation reports that an internet connection is required. Reconnect and refresh; verify server data loads and the assignment list reflects the current server state. Repeat on each device/browser because Firestore caches are device-local. Automated connectivity-state checks are included in `flutter test`; Firestore reconnection behavior requires a signed-in Firebase environment.
+
 ## Push notifications
 
 Firebase Messaging is configured for Android and web. A signed-in user can open **Notifications** and enable device alerts. Each device registration is stored under that user's `fcmInstallations` subcollection. The Firestore rules restrict those records to their owner, and notification history is readable only by its recipient or a school administrator.

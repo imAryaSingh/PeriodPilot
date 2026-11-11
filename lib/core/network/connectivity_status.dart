@@ -30,8 +30,7 @@ class ConnectivityStatus extends ChangeNotifier {
   }
 
   void _update(List<ConnectivityResult> results) {
-    final offline =
-        results.isEmpty || results.every((r) => r == ConnectivityResult.none);
+    final offline = isOfflineFromConnectivity(results);
     if (offline == _isOffline) return;
     _isOffline = offline;
     notifyListeners();
@@ -49,3 +48,8 @@ class ConnectivityStatus extends ChangeNotifier {
     super.dispose();
   }
 }
+
+/// A transport-level hint only; internet reachability still depends on the
+/// Firestore request succeeding.
+bool isOfflineFromConnectivity(List<ConnectivityResult> results) =>
+    results.isEmpty || results.every((r) => r == ConnectivityResult.none);
