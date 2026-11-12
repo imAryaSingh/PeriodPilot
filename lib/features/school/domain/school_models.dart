@@ -1,3 +1,27 @@
+bool _valueToBool(Object? value) {
+  if (value is bool) return value;
+  if (value is num) return value != 0;
+  if (value is String) {
+    final normalized = value.trim().toLowerCase();
+    if (normalized == 'true' || normalized == '1' || normalized == 'yes') {
+      return true;
+    }
+    if (normalized == 'false' || normalized == '0' || normalized == 'no') {
+      return false;
+    }
+  }
+  return false;
+}
+
+bool _rowBool(Map<String, Object?> row, String camelKey, [String? snakeKey]) {
+  final snake = snakeKey ?? camelKey.replaceAllMapped(
+    RegExp(r'(?<!^)([A-Z])'),
+    (match) => '_${match.group(1)!.toLowerCase()}',
+  );
+  final value = row[camelKey] ?? row[snake];
+  return _valueToBool(value);
+}
+
 class SchoolProfile {
   const SchoolProfile({required this.name, this.address = '', this.phone = ''});
 
@@ -35,7 +59,7 @@ class Teacher {
     staffCode: row['staff_code'] as String? ?? '',
     email: row['email'] as String? ?? '',
     phone: row['phone'] as String? ?? '',
-    isActive: row['is_active'] == 1,
+    isActive: _rowBool(row, 'isActive', 'is_active'),
   );
 }
 
@@ -84,7 +108,7 @@ class Subject {
     id: row['id'] as int,
     name: row['name'] as String,
     code: row['code'] as String? ?? '',
-    isActive: row['is_active'] == 1,
+    isActive: _rowBool(row, 'isActive', 'is_active'),
   );
 }
 
@@ -110,7 +134,7 @@ class SchoolPeriod {
     name: row['name'] as String? ?? '',
     startMinute: row['startMinute'] as int? ?? row['start_minute'] as int? ?? 0,
     endMinute: row['endMinute'] as int? ?? row['end_minute'] as int? ?? 0,
-    isActive: row['isActive'] as bool? ?? (row['is_active'] == 1),
+    isActive: _rowBool(row, 'isActive', 'is_active'),
     sortOrder:
         row['sortOrder'] as int? ??
         row['sort_order'] as int? ??
@@ -241,7 +265,7 @@ class SubstitutionAssignment {
     subjectId: ((row['subjectId'] ?? row['subject_id']) as num).toInt(),
     periodId: ((row['periodId'] ?? row['period_id']) as num).toInt(),
     room: row['room'] as String? ?? '',
-    isOverride: row['isOverride'] as bool? ?? (row['is_override'] == 1),
+    isOverride: _rowBool(row, 'isOverride', 'is_override'),
     status: (row['status'] as String?) == 'cancelled'
         ? SubstitutionStatus.cancelled
         : SubstitutionStatus.assigned,

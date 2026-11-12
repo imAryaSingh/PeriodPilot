@@ -237,6 +237,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
       'full_name': teacher.fullName.trim(),
       'email': teacher.email.trim(),
       'phone': teacher.phone.trim(),
+      'is_active': teacher.isActive ? 1 : 0,
       'updated_at': now,
     };
     if (teacher.id == null) {
@@ -345,6 +346,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
     final values = {
       'name': subject.name.trim(),
       'code': subject.code.trim().isEmpty ? null : subject.code.trim(),
+      'is_active': subject.isActive ? 1 : 0,
     };
     if (subject.id == null) {
       await db.insert('subjects', values);
