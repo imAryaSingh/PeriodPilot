@@ -118,33 +118,20 @@ class _DashboardState extends State<_Dashboard> {
         builder: (context, box) {
           final wide = box.maxWidth > 850;
           final horizontalPadding = wide ? 32.0 : 18.0;
-          return Column(
+          return ListView(
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              16,
+              horizontalPadding,
+              22,
+            ),
             children: [
-              Padding(
-                padding: EdgeInsets.fromLTRB(
-                  horizontalPadding,
-                  16,
-                  horizontalPadding,
-                  12,
-                ),
-                child: _hero(context),
-              ),
-              Expanded(
-                child: ListView(
-                  padding: EdgeInsets.fromLTRB(
-                    horizontalPadding,
-                    8,
-                    horizontalPadding,
-                    22,
-                  ),
-                  children: [
-                    if (widget.profile.role == UserRole.teacher)
-                      _teacherContent(context, data)
-                    else
-                      _adminContent(context, data),
-                  ],
-                ),
-              ),
+              _hero(context),
+              const SizedBox(height: 20),
+              if (widget.profile.role == UserRole.teacher)
+                _teacherContent(context, data)
+              else
+                _adminContent(context, data),
             ],
           );
         },

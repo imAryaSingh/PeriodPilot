@@ -1022,15 +1022,16 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     return context.read<SchoolDatabase>().getSections(_classId!);
   }
 
-  Future<void> _openEditor([TimetableEntry? entry]) async {
+  Future<void> _openEditor({TimetableEntry? entry, int? periodId}) async {
     final result = await showDialog<TimetableEntry>(
       context: context,
       builder: (_) => _TimetableEntryDialog(
         entry: entry,
         data: widget.data,
-        initialClassId: _classId,
+        initialClassId: _view == _TimetableView.classView ? _classId : null,
         initialTeacherId: _teacherId,
         initialDay: _day ?? _firstDay,
+        initialPeriodId: periodId,
       ),
     );
     if (result == null || !mounted) return;
@@ -1078,6 +1079,10 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     final activeTeachers = data.teachers
         .where((teacher) => teacher.isActive)
         .toList();
+    final hasLessonOptions =
+        data.classes.isNotEmpty &&
+        activeTeachers.isNotEmpty &&
+        data.subjects.any((subject) => subject.isActive);
     final entries =
         data.entries.where((entry) {
             if (entry.dayOfWeek != _day) return false;
@@ -1183,7 +1188,33 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                                   ? const Chip(label: Text('Free period'))
                                   : null,
                             ),
-                            if (lessons.isEmpty)
+                            if (lessons.isEmpty &&
+                                _view == _TimetableView.teacherView)
+                              Padding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  60,
+                                  0,
+                                  12,
+                                  4,
+                                ),
+                                child: ListTile(
+                                  leading: const Icon(Icons.add_circle_outline),
+                                  title: Text(
+                                    hasLessonOptions
+                                        ? 'Assign class and subject'
+                                        : 'Complete school setup first',
+                                  ),
+                                  subtitle: Text(
+                                    hasLessonOptions
+                                        ? 'Tap to add a lesson for this teacher.'
+                                        : 'Add a class and active subject before assigning lessons.',
+                                  ),
+                                  onTap: hasLessonOptions
+                                      ? () => _openEditor(periodId: period.id)
+                                      : null,
+                                ),
+                              )
+                            else if (lessons.isEmpty)
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(
                                   72,
@@ -1242,7 +1273,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
         children: [
           IconButton(
             tooltip: 'Edit lesson',
-            onPressed: () => _openEditor(entry),
+            onPressed: () => _openEditor(entry: entry),
             icon: const Icon(Icons.edit_outlined),
           ),
           IconButton(
@@ -1373,6 +1404,7 @@ class _TimetableEntryDialog extends StatefulWidget {
     required this.initialClassId,
     required this.initialTeacherId,
     required this.initialDay,
+    required this.initialPeriodId,
   });
 
   final TimetableEntry? entry;
@@ -1380,6 +1412,7 @@ class _TimetableEntryDialog extends StatefulWidget {
   final int? initialClassId;
   final int? initialTeacherId;
   final int initialDay;
+  final int? initialPeriodId;
 
   @override
   State<_TimetableEntryDialog> createState() => _TimetableEntryDialogState();
@@ -1404,7 +1437,7 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
     _classId = entry?.classId ?? widget.initialClassId;
     _teacherId = entry?.teacherId ?? widget.initialTeacherId;
     _subjectId = entry?.subjectId ?? _firstSubject;
-    _periodId = entry?.periodId ?? _firstPeriod;
+    _periodId = entry?.periodId ?? widget.initialPeriodId ?? _firstPeriod;
     _day = entry?.dayOfWeek ?? widget.initialDay;
     _sectionId = entry?.sectionId ?? 0;
     _room.text = entry?.room ?? '';
