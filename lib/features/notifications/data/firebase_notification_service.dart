@@ -43,6 +43,12 @@ class FirebaseNotificationService {
     if (profile.schoolId == null || !profile.active) return;
     _activeUid = profile.uid;
     _listenForMessages();
+    // Push is optional. Do not make app startup or sign-in wait on the
+    // browser/device messaging service, which can take several seconds.
+    unawaited(_initializePush());
+  }
+
+  Future<void> _initializePush() async {
     try {
       final settings = await _messaging.getNotificationSettings();
       _authorizationStatus = settings.authorizationStatus;
