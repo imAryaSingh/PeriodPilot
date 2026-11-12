@@ -5,11 +5,13 @@ import '../data/school_database.dart';
 import '../domain/school_models.dart';
 
 class SchoolManagementScreen extends StatelessWidget {
-  const SchoolManagementScreen({super.key});
+  const SchoolManagementScreen({super.key, this.initialTabIndex = 0});
+  final int initialTabIndex;
 
   @override
   Widget build(BuildContext context) => DefaultTabController(
     length: 4,
+    initialIndex: initialTabIndex,
     child: Scaffold(
       appBar: AppBar(
         title: const Text('School setup'),
@@ -342,8 +344,9 @@ class _TeacherDialogState extends State<_TeacherDialog> {
   final _formKey = GlobalKey<FormState>();
   late final TextEditingController _name;
   late final TextEditingController _code;
-  late final TextEditingController _email;
   late final TextEditingController _phone;
+  late Future<List<Subject>> _subjects;
+  late Set<int> _subjectIds;
   String? _error;
   bool _saving = false;
 
@@ -352,15 +355,15 @@ class _TeacherDialogState extends State<_TeacherDialog> {
     super.initState();
     _name = TextEditingController(text: widget.teacher?.fullName ?? '');
     _code = TextEditingController(text: widget.teacher?.staffCode ?? '');
-    _email = TextEditingController(text: widget.teacher?.email ?? '');
     _phone = TextEditingController(text: widget.teacher?.phone ?? '');
+    _subjectIds = widget.teacher?.subjectIds.toSet() ?? <int>{};
+    _subjects = context.read<SchoolDatabase>().getSubjects();
   }
 
   @override
   void dispose() {
     _name.dispose();
     _code.dispose();
-    _email.dispose();
     _phone.dispose();
     super.dispose();
   }
@@ -377,9 +380,11 @@ class _TeacherDialogState extends State<_TeacherDialog> {
           id: widget.teacher?.id,
           fullName: _name.text,
           staffCode: _code.text,
-          email: _email.text,
+          // Keep legacy/auth email data intact without requiring it in the admin form.
+          email: widget.teacher?.email ?? '',
           phone: _phone.text,
           isActive: widget.teacher?.isActive ?? true,
+          subjectIds: _subjectIds.toList()..sort(),
         ),
       );
       if (mounted) Navigator.pop(context, true);
@@ -413,7 +418,7 @@ class _TeacherDialogState extends State<_TeacherDialog> {
                 controller: _name,
                 autofocus: true,
                 textCapitalization: TextCapitalization.words,
-                decoration: const InputDecoration(labelText: 'Full name'),
+                decoration: const InputDecoration(labelText: 'Teacher name'),
                 validator: (value) => (value?.trim().isEmpty ?? true)
                     ? 'Enter the teacher name'
                     : null,
@@ -427,28 +432,66 @@ class _TeacherDialogState extends State<_TeacherDialog> {
               ),
               const SizedBox(height: 12),
               TextFormField(
-                controller: _email,
-                keyboardType: TextInputType.emailAddress,
-                decoration: const InputDecoration(
-                  labelText: 'Email (optional)',
-                ),
-                validator: (value) {
-                  final email = value?.trim() ?? '';
-                  if (email.isNotEmpty &&
-                      !RegExp(r'^[^@\s]+@[^@\s]+\.[^@\s]+$').hasMatch(email)) {
-                    return 'Enter a valid email address';
-                  }
-                  return null;
-                },
-              ),
-              const SizedBox(height: 12),
-              TextFormField(
                 controller: _phone,
                 keyboardType: TextInputType.phone,
                 decoration: const InputDecoration(
-                  labelText: 'Phone (optional)',
+                  labelText: 'Mobile number (optional)',
                 ),
               ),
+              const SizedBox(height: 12),
+              FutureBuilder<List<Subject>>(
+                future: _subjects,
+                builder: (context, snapshot) {
+                  final available = (snapshot.data ?? const <Subject>[])
+                      .where(
+                        (subject) => subject.isActive && subject.id != null,
+                      )
+                      .toList();
+                  return Align(
+                    alignment: Alignment.centerLeft,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        OutlinedButton.icon(
+                          onPressed: snapshot.hasData
+                              ? () => _chooseSubjects(available)
+                              : null,
+                          icon: const Icon(Icons.menu_book_outlined),
+                          label: const Text(
+                            'Subjects taught · Select multiple',
+                          ),
+                        ),
+                        if (available.any(
+                          (subject) => _subjectIds.contains(subject.id),
+                        ))
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            children: [
+                              for (final subject in available.where(
+                                (item) => _subjectIds.contains(item.id),
+                              ))
+                                InputChip(
+                                  label: Text(subject.name),
+                                  onDeleted: () => setState(
+                                    () => _subjectIds.remove(subject.id),
+                                  ),
+                                ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  );
+                },
+              ),
+              if (_subjectIds.isEmpty)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'No subjects selected',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
               if (_error != null) ...[
                 const SizedBox(height: 12),
                 _ErrorCard(message: _error!),
@@ -474,6 +517,103 @@ class _TeacherDialogState extends State<_TeacherDialog> {
       ),
     ],
   );
+
+  Future<void> _chooseSubjects(List<Subject> available) async {
+    final selected = await showDialog<Set<int>>(
+      context: context,
+      builder: (context) =>
+          _SubjectPickerDialog(subjects: available, initial: _subjectIds),
+    );
+    if (selected != null && mounted) setState(() => _subjectIds = selected);
+  }
+}
+
+class _SubjectPickerDialog extends StatefulWidget {
+  const _SubjectPickerDialog({
+    required this.subjects,
+    required this.initial,
+    this.title = 'Teacher subjects',
+  });
+  final List<Subject> subjects;
+  final Set<int> initial;
+  final String title;
+  @override
+  State<_SubjectPickerDialog> createState() => _SubjectPickerDialogState();
+}
+
+class _SubjectPickerDialogState extends State<_SubjectPickerDialog> {
+  final _search = TextEditingController();
+  late final Set<int> _selected = widget.initial.toSet();
+  @override
+  void dispose() {
+    _search.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final query = _search.text.trim().toLowerCase();
+    final visible = widget.subjects
+        .where(
+          (s) =>
+              s.name.toLowerCase().contains(query) ||
+              s.code.toLowerCase().contains(query),
+        )
+        .toList();
+    return AlertDialog(
+      title: Text(widget.title),
+      content: SizedBox(
+        width: 420,
+        height: 360,
+        child: Column(
+          children: [
+            TextField(
+              controller: _search,
+              decoration: const InputDecoration(
+                prefixIcon: Icon(Icons.search),
+                labelText: 'Search subjects',
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+            const SizedBox(height: 8),
+            Expanded(
+              child: visible.isEmpty
+                  ? const Center(child: Text('No matching subjects'))
+                  : ListView(
+                      children: [
+                        for (final subject in visible)
+                          CheckboxListTile(
+                            value: _selected.contains(subject.id),
+                            title: Text(subject.name),
+                            subtitle: subject.code.isEmpty
+                                ? null
+                                : Text(subject.code),
+                            onChanged: (selected) => setState(() {
+                              if (selected == true) {
+                                _selected.add(subject.id!);
+                              } else {
+                                _selected.remove(subject.id);
+                              }
+                            }),
+                          ),
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, _selected),
+          child: const Text('Apply'),
+        ),
+      ],
+    );
+  }
 }
 
 class _ClassesTab extends StatefulWidget {
@@ -490,6 +630,78 @@ class _ClassesTabState extends State<_ClassesTab> {
   void initState() {
     super.initState();
     _classes = context.read<SchoolDatabase>().getClasses();
+    _ensureDefaultClasses();
+  }
+
+  Future<void> _ensureDefaultClasses() async {
+    final database = context.read<SchoolDatabase>();
+    final names = [
+      'Nursery',
+      'LKG',
+      'UKG',
+      ...List.generate(12, (i) => 'Class ${i + 1}'),
+    ];
+    var classes = await database.getClasses();
+    final known = {
+      for (final item in classes) item.name.trim().toLowerCase(): item,
+    };
+    for (var index = 0; index < names.length; index++) {
+      var schoolClass = known[names[index].toLowerCase()];
+      if (schoolClass == null) {
+        await database.saveClass(
+          SchoolClass(id: 0, name: names[index], sortOrder: index),
+        );
+        classes = await database.getClasses();
+        schoolClass = classes.firstWhere(
+          (item) => item.name.toLowerCase() == names[index].toLowerCase(),
+        );
+        known[names[index].toLowerCase()] = schoolClass;
+      } else if (schoolClass.sortOrder != index) {
+        await database.saveClass(
+          SchoolClass(
+            id: schoolClass.id,
+            name: schoolClass.name,
+            isActive: schoolClass.isActive,
+            sortOrder: index,
+            subjectIds: schoolClass.subjectIds,
+          ),
+        );
+        schoolClass = SchoolClass(
+          id: schoolClass.id,
+          name: schoolClass.name,
+          isActive: schoolClass.isActive,
+          sortOrder: index,
+          subjectIds: schoolClass.subjectIds,
+        );
+      }
+      final sections = await database.getSections(schoolClass.id);
+      for (final sectionName in const ['A', 'B', 'C']) {
+        if (!sections.any(
+          (item) => item.name.toLowerCase() == sectionName.toLowerCase(),
+        )) {
+          await database.saveSection(
+            SchoolSection(id: 0, classId: schoolClass.id, name: sectionName),
+          );
+        }
+      }
+    }
+    final defaultNames = names.map((name) => name.toLowerCase()).toSet();
+    for (final item in classes.where(
+      (item) =>
+          !defaultNames.contains(item.name.toLowerCase()) &&
+          item.sortOrder == 0,
+    )) {
+      await database.saveClass(
+        SchoolClass(
+          id: item.id,
+          name: item.name,
+          isActive: item.isActive,
+          sortOrder: 1000,
+          subjectIds: item.subjectIds,
+        ),
+      );
+    }
+    if (mounted) _reload();
   }
 
   void _reload() =>
@@ -506,7 +718,13 @@ class _ClassesTabState extends State<_ClassesTab> {
     if (name == null) return;
     try {
       await database.saveClass(
-        SchoolClass(id: schoolClass?.id ?? 0, name: name),
+        SchoolClass(
+          id: schoolClass?.id ?? 0,
+          name: name,
+          isActive: schoolClass?.isActive ?? true,
+          sortOrder: schoolClass?.sortOrder ?? 1000,
+          subjectIds: schoolClass?.subjectIds ?? const <int>[],
+        ),
       );
       if (mounted) _reload();
     } catch (error) {
@@ -525,7 +743,12 @@ class _ClassesTabState extends State<_ClassesTab> {
     if (name == null) return;
     try {
       await database.saveSection(
-        SchoolSection(id: section?.id ?? 0, classId: classId, name: name),
+        SchoolSection(
+          id: section?.id ?? 0,
+          classId: classId,
+          name: name,
+          isActive: section?.isActive ?? true,
+        ),
       );
       if (mounted) _reload();
     } catch (error) {
@@ -535,31 +758,40 @@ class _ClassesTabState extends State<_ClassesTab> {
     }
   }
 
-  Future<void> _deleteClass(SchoolClass schoolClass) async {
-    final database = context.read<SchoolDatabase>();
-    if (!await _confirmDelete(
-      context,
-      'Delete ${schoolClass.name}?',
-      'This will also remove its sections from this device.',
-    )) {
-      return;
-    }
-    if (!mounted) return;
-    await database.deleteClass(schoolClass.id);
+  Future<void> _setClassActive(SchoolClass item, bool value) async {
+    await context.read<SchoolDatabase>().setClassActive(item.id, value);
     if (mounted) _reload();
   }
 
-  Future<void> _deleteSection(SchoolSection section) async {
-    final database = context.read<SchoolDatabase>();
-    if (!await _confirmDelete(
-      context,
-      'Delete section ${section.name}?',
-      'This removes the section from this device.',
-    )) {
-      return;
-    }
+  Future<void> _setSectionActive(SchoolSection item, bool value) async {
+    await context.read<SchoolDatabase>().setSectionActive(item.id, value);
+    if (mounted) _reload();
+  }
+
+  Future<void> _editClassSubjects(SchoolClass schoolClass) async {
+    final db = context.read<SchoolDatabase>();
+    final subjects = (await db.getSubjects())
+        .where((subject) => subject.isActive && subject.id != null)
+        .toList();
     if (!mounted) return;
-    await database.deleteSection(section.id);
+    final selected = await showDialog<Set<int>>(
+      context: context,
+      builder: (_) => _SubjectPickerDialog(
+        subjects: subjects,
+        initial: schoolClass.subjectIds.toSet(),
+        title: 'Subjects available to ${schoolClass.name}',
+      ),
+    );
+    if (selected == null) return;
+    await db.saveClass(
+      SchoolClass(
+        id: schoolClass.id,
+        name: schoolClass.name,
+        isActive: schoolClass.isActive,
+        sortOrder: schoolClass.sortOrder,
+        subjectIds: selected.toList(),
+      ),
+    );
     if (mounted) _reload();
   }
 
@@ -578,8 +810,9 @@ class _ClassesTabState extends State<_ClassesTab> {
         children: [
           _ListHeader(
             title: 'Classes and sections',
-            subtitle: '${classes.length} classes',
-            actionLabel: 'Add class',
+            subtitle:
+                '${classes.where((item) => item.isActive).length} active · ${classes.length} total',
+            actionLabel: 'Add custom class',
             onAction: () => _editClass(),
           ),
           Expanded(
@@ -595,73 +828,114 @@ class _ClassesTabState extends State<_ClassesTab> {
                     itemBuilder: (context, index) {
                       final schoolClass = classes[index];
                       return Card(
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(18, 12, 12, 16),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                        child: ExpansionTile(
+                          initiallyExpanded: false,
+                          title: Row(
                             children: [
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      schoolClass.name,
-                                      style: Theme.of(
-                                        context,
-                                      ).textTheme.titleMedium,
-                                    ),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Edit class',
-                                    onPressed: () => _editClass(schoolClass),
-                                    icon: const Icon(Icons.edit_outlined),
-                                  ),
-                                  IconButton(
-                                    tooltip: 'Delete class',
-                                    onPressed: () => _deleteClass(schoolClass),
-                                    icon: const Icon(Icons.delete_outline),
-                                  ),
-                                ],
+                              Expanded(
+                                child: Text(
+                                  '${schoolClass.name}${schoolClass.isActive ? '' : ' · Inactive'}',
+                                  style: Theme.of(
+                                    context,
+                                  ).textTheme.titleMedium,
+                                ),
                               ),
-                              FutureBuilder<List<SchoolSection>>(
-                                future: context
-                                    .read<SchoolDatabase>()
-                                    .getSections(schoolClass.id),
-                                builder: (context, sectionSnapshot) {
-                                  if (sectionSnapshot.hasError) {
-                                    return const Text(
-                                      'Could not load sections.',
-                                    );
-                                  }
-                                  if (!sectionSnapshot.hasData) {
-                                    return const LinearProgressIndicator();
-                                  }
-                                  final sections = sectionSnapshot.data!;
-                                  return Wrap(
-                                    spacing: 8,
-                                    runSpacing: 8,
-                                    children: [
-                                      for (final section in sections)
-                                        InputChip(
-                                          label: Text(section.name),
-                                          onPressed: () => _editSection(
-                                            schoolClass.id,
-                                            section,
-                                          ),
-                                          onDeleted: () =>
-                                              _deleteSection(section),
-                                        ),
-                                      ActionChip(
-                                        avatar: const Icon(Icons.add, size: 18),
-                                        label: const Text('Add section'),
-                                        onPressed: () =>
-                                            _editSection(schoolClass.id),
-                                      ),
-                                    ],
-                                  );
-                                },
+                              IconButton(
+                                tooltip: 'Edit class',
+                                onPressed: () => _editClass(schoolClass),
+                                icon: const Icon(Icons.edit_outlined),
+                              ),
+                              Tooltip(
+                                message: schoolClass.isActive
+                                    ? 'Disable class'
+                                    : 'Enable class',
+                                child: Switch(
+                                  value: schoolClass.isActive,
+                                  onChanged: (value) =>
+                                      _setClassActive(schoolClass, value),
+                                ),
                               ),
                             ],
                           ),
+                          childrenPadding: const EdgeInsets.fromLTRB(
+                            18,
+                            0,
+                            12,
+                            16,
+                          ),
+                          children: [
+                            Align(
+                              alignment: Alignment.centerLeft,
+                              child: TextButton.icon(
+                                onPressed: () =>
+                                    _editClassSubjects(schoolClass),
+                                icon: const Icon(Icons.menu_book_outlined),
+                                label: Text(
+                                  schoolClass.subjectIds.isEmpty
+                                      ? 'Allow all active subjects'
+                                      : 'Configure ${schoolClass.subjectIds.length} class subjects',
+                                ),
+                              ),
+                            ),
+                            FutureBuilder<List<SchoolSection>>(
+                              future: context
+                                  .read<SchoolDatabase>()
+                                  .getSections(schoolClass.id),
+                              builder: (context, sectionSnapshot) {
+                                if (sectionSnapshot.hasError) {
+                                  return const Text('Could not load sections.');
+                                }
+                                if (!sectionSnapshot.hasData) {
+                                  return const LinearProgressIndicator();
+                                }
+                                final sections = sectionSnapshot.data!;
+                                return Wrap(
+                                  spacing: 8,
+                                  runSpacing: 8,
+                                  children: [
+                                    for (final section in sections)
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          ActionChip(
+                                            label: Text(section.name),
+                                            avatar: Icon(
+                                              section.isActive
+                                                  ? Icons.check_circle_outline
+                                                  : Icons.block_outlined,
+                                              size: 18,
+                                            ),
+                                            onPressed: () => _editSection(
+                                              schoolClass.id,
+                                              section,
+                                            ),
+                                          ),
+                                          Tooltip(
+                                            message: section.isActive
+                                                ? 'Disable section ${section.name}'
+                                                : 'Enable section ${section.name}',
+                                            child: Switch(
+                                              value: section.isActive,
+                                              onChanged: (value) =>
+                                                  _setSectionActive(
+                                                    section,
+                                                    value,
+                                                  ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ActionChip(
+                                      avatar: const Icon(Icons.add, size: 18),
+                                      label: const Text('Add section'),
+                                      onPressed: () =>
+                                          _editSection(schoolClass.id),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                          ],
                         ),
                       );
                     },
@@ -1070,30 +1344,6 @@ Future<String?> _nameDialog(
   controller.dispose();
   return value;
 }
-
-Future<bool> _confirmDelete(
-  BuildContext context,
-  String title,
-  String message,
-) async =>
-    await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: Text(title),
-        content: Text(message),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Cancel'),
-          ),
-          FilledButton.tonal(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    ) ??
-    false;
 
 String _duplicateMessage(Object error, String field) =>
     error.toString().contains('UNIQUE') ||

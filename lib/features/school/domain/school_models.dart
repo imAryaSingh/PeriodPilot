@@ -14,12 +14,31 @@ bool _valueToBool(Object? value) {
 }
 
 bool _rowBool(Map<String, Object?> row, String camelKey, [String? snakeKey]) {
-  final snake = snakeKey ?? camelKey.replaceAllMapped(
-    RegExp(r'(?<!^)([A-Z])'),
-    (match) => '_${match.group(1)!.toLowerCase()}',
-  );
+  final snake =
+      snakeKey ??
+      camelKey.replaceAllMapped(
+        RegExp(r'(?<!^)([A-Z])'),
+        (match) => '_${match.group(1)!.toLowerCase()}',
+      );
   final value = row[camelKey] ?? row[snake];
   return _valueToBool(value);
+}
+
+List<int> _intList(Object? value) {
+  if (value is Iterable) {
+    return value
+        .whereType<num>()
+        .map((id) => id.toInt())
+        .toList(growable: false);
+  }
+  if (value is String && value.isNotEmpty) {
+    return value
+        .split(',')
+        .map(int.tryParse)
+        .whereType<int>()
+        .toList(growable: false);
+  }
+  return const <int>[];
 }
 
 class SchoolProfile {
@@ -44,6 +63,7 @@ class Teacher {
     required this.email,
     required this.phone,
     required this.isActive,
+    this.subjectIds = const <int>[],
   });
 
   final int? id;
@@ -52,6 +72,7 @@ class Teacher {
   final String email;
   final String phone;
   final bool isActive;
+  final List<int> subjectIds;
 
   factory Teacher.fromMap(Map<String, Object?> row) => Teacher(
     id: row['id'] as int,
@@ -60,17 +81,34 @@ class Teacher {
     email: row['email'] as String? ?? '',
     phone: row['phone'] as String? ?? '',
     isActive: _rowBool(row, 'isActive', 'is_active'),
+    subjectIds: _intList(row['subjectIds'] ?? row['subject_ids']),
   );
 }
 
 class SchoolClass {
-  const SchoolClass({required this.id, required this.name});
+  const SchoolClass({
+    required this.id,
+    required this.name,
+    this.isActive = true,
+    this.sortOrder = 0,
+    this.subjectIds = const <int>[],
+  });
 
   final int id;
   final String name;
+  final bool isActive;
+  final int sortOrder;
+  final List<int> subjectIds;
 
-  factory SchoolClass.fromMap(Map<String, Object?> row) =>
-      SchoolClass(id: row['id'] as int, name: row['name'] as String);
+  factory SchoolClass.fromMap(Map<String, Object?> row) => SchoolClass(
+    id: row['id'] as int,
+    name: row['name'] as String,
+    isActive: row['isActive'] == null && row['is_active'] == null
+        ? true
+        : _rowBool(row, 'isActive', 'is_active'),
+    sortOrder: ((row['sortOrder'] ?? row['sort_order']) as num?)?.toInt() ?? 0,
+    subjectIds: _intList(row['subjectIds'] ?? row['subject_ids']),
+  );
 }
 
 class SchoolSection {
@@ -78,16 +116,21 @@ class SchoolSection {
     required this.id,
     required this.classId,
     required this.name,
+    this.isActive = true,
   });
 
   final int id;
   final int classId;
   final String name;
+  final bool isActive;
 
   factory SchoolSection.fromMap(Map<String, Object?> row) => SchoolSection(
     id: row['id'] as int,
     classId: row['class_id'] as int,
     name: row['name'] as String,
+    isActive: row['isActive'] == null && row['is_active'] == null
+        ? true
+        : _rowBool(row, 'isActive', 'is_active'),
   );
 }
 

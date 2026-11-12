@@ -1,5 +1,10 @@
 import '../domain/school_models.dart';
 
+T? firstOrNull<T>(Iterable<T> values) {
+  final iterator = values.iterator;
+  return iterator.moveNext() ? iterator.current : null;
+}
+
 abstract interface class SchoolDatabase {
   Future<SchoolProfile> getSchoolProfile();
   Future<void> saveSchoolProfile(SchoolProfile profile);
@@ -9,9 +14,9 @@ abstract interface class SchoolDatabase {
   Future<List<SchoolClass>> getClasses();
   Future<List<SchoolSection>> getSections(int classId);
   Future<void> saveClass(SchoolClass schoolClass);
-  Future<void> deleteClass(int id);
+  Future<void> setClassActive(int id, bool isActive);
   Future<void> saveSection(SchoolSection section);
-  Future<void> deleteSection(int id);
+  Future<void> setSectionActive(int id, bool isActive);
   Future<List<Subject>> getSubjects();
   Future<void> saveSubject(Subject subject);
   Future<void> setSubjectActive(int id, bool isActive);
@@ -103,6 +108,43 @@ void validateTimetableEntryConflicts(
         'This teacher is already assigned during that period.',
       );
     }
+  }
+}
+
+void validateTimetableEntryEligibility({
+  required TimetableEntry entry,
+  required Teacher? teacher,
+  required SchoolClass? schoolClass,
+  required SchoolSection? section,
+  required Subject? subject,
+}) {
+  if (teacher == null || !teacher.isActive) {
+    throw const SchoolDataException('Choose an enabled teacher.');
+  }
+  if (schoolClass == null || !schoolClass.isActive) {
+    throw const SchoolDataException('Choose an enabled class.');
+  }
+  if (entry.sectionId != null &&
+      (section == null ||
+          !section.isActive ||
+          section.classId != entry.classId)) {
+    throw const SchoolDataException(
+      'Choose an enabled section for this class.',
+    );
+  }
+  if (subject == null || !subject.isActive) {
+    throw const SchoolDataException('Choose an enabled subject.');
+  }
+  if (!teacher.subjectIds.contains(entry.subjectId)) {
+    throw const SchoolDataException(
+      'Assign this subject to the teacher before adding the timetable lesson.',
+    );
+  }
+  if (schoolClass.subjectIds.isNotEmpty &&
+      !schoolClass.subjectIds.contains(entry.subjectId)) {
+    throw const SchoolDataException(
+      'This subject is not enabled for the selected class.',
+    );
   }
 }
 

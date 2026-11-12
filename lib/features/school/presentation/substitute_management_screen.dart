@@ -38,9 +38,11 @@ class _SubstituteManagementScreenState
       classes.map((c) => db.getSections(c.id)),
     );
     final sections = <int, String>{};
+    final activeSectionIds = <int>{};
     for (final group in sectionGroups) {
       for (final section in group) {
         sections[section.id] = section.name;
+        if (section.isActive) activeSectionIds.add(section.id);
       }
     }
     return _AllocationData(
@@ -52,6 +54,7 @@ class _SubstituteManagementScreenState
       subjects: values[5] as List<Subject>,
       assignments: values[6] as List<SubstitutionAssignment>,
       sections: sections,
+      activeSectionIds: activeSectionIds,
     );
   }
 
@@ -82,6 +85,8 @@ class _SubstituteManagementScreenState
       dayOfWeek: _date.weekday,
       date: _date,
       subjectId: lesson.subjectId,
+      classId: lesson.classId,
+      sectionId: lesson.sectionId,
       replacingAssignmentId: existing?.id,
     );
     if (suggestions.isEmpty) {
@@ -118,6 +123,12 @@ class _SubstituteManagementScreenState
                           defaultMaximumDailySubstitutions)
                         'Daily suggestion limit · administrator override required',
                       if (suggestion.hasSubjectExperience) 'Subject experience',
+                      if (!suggestion.hasSubjectExperience)
+                        'Fallback · outside assigned subjects',
+                      if (suggestion.hasClassExperience)
+                        'Has taught this class',
+                      if (suggestion.hasSectionExperience)
+                        'Has taught this section',
                       suggestion.dutiesToday == 0
                           ? 'No duties today'
                           : '${suggestion.dutiesToday} duties today',
@@ -296,7 +307,17 @@ class _SubstituteManagementScreenState
             (e) =>
                 e.teacherId == absence.teacherId &&
                 e.dayOfWeek == _date.weekday &&
-                !activeEntryIds.contains(e.id),
+                !activeEntryIds.contains(e.id) &&
+                data.classes.any(
+                  (c) =>
+                      c.id == e.classId &&
+                      c.isActive &&
+                      (c.subjectIds.isEmpty ||
+                          c.subjectIds.contains(e.subjectId)),
+                ) &&
+                (e.sectionId == null ||
+                    data.activeSectionIds.contains(e.sectionId)) &&
+                data.subjects.any((s) => s.id == e.subjectId && s.isActive),
           )) {
             uncovered.add((lesson: lesson, absence: absence));
           }
@@ -627,6 +648,7 @@ class _AllocationData {
     required this.subjects,
     required this.assignments,
     required this.sections,
+    required this.activeSectionIds,
   });
   final List<Teacher> teachers;
   final List<TeacherAbsence> absences;
@@ -636,6 +658,7 @@ class _AllocationData {
   final List<Subject> subjects;
   final List<SubstitutionAssignment> assignments;
   final Map<int, String> sections;
+  final Set<int> activeSectionIds;
 }
 
 Teacher? _teacherById(_AllocationData d, int id) {

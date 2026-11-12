@@ -74,6 +74,10 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
         email: d['email'] as String? ?? '',
         phone: d['phone'] as String? ?? '',
         isActive: d['isActive'] as bool? ?? true,
+        subjectIds: ((d['subjectIds'] as List?) ?? const [])
+            .whereType<num>()
+            .map((id) => id.toInt())
+            .toList(),
       );
     }).toList();
     teachers.sort((a, b) {
@@ -89,10 +93,15 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     final id = teacher.id ?? _newId();
     final code = teacher.staffCode.trim();
     if (code.isNotEmpty) {
-      final duplicate = await collection
-          .where('staffCodeKey', isEqualTo: code.toLowerCase())
-          .get();
-      if (duplicate.docs.any((doc) => doc.id != '$id')) {
+      final duplicate = await collection.get();
+      if (duplicate.docs.any(
+        (doc) =>
+            doc.id != '$id' &&
+            ((doc.data()['staffCodeKey'] as String?) ??
+                        (doc.data()['staffCode'] as String? ?? ''))
+                    .toLowerCase() ==
+                code.toLowerCase(),
+      )) {
         throw const DuplicateSchoolRecordException(
           'That staff ID is already in use.',
         );
@@ -108,9 +117,10 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       'email': teacher.email.trim(),
       'phone': teacher.phone.trim(),
       'isActive': teacher.isActive,
+      'subjectIds': teacher.subjectIds.toSet().toList(),
       'createdAt': old.data()?['createdAt'] ?? FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
-    });
+    }, SetOptions(merge: true));
   }
 
   @override
@@ -129,11 +139,19 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
           (doc) => SchoolClass(
             id: doc.data()['id'] as int,
             name: doc.data()['name'] as String? ?? '',
+            isActive: doc.data()['isActive'] as bool? ?? true,
+            sortOrder: (doc.data()['sortOrder'] as num?)?.toInt() ?? 0,
+            subjectIds: ((doc.data()['subjectIds'] as List?) ?? const [])
+                .whereType<num>()
+                .map((id) => id.toInt())
+                .toList(),
           ),
         )
         .toList();
     classes.sort(
-      (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      (a, b) => a.sortOrder != b.sortOrder
+          ? a.sortOrder.compareTo(b.sortOrder)
+          : a.name.toLowerCase().compareTo(b.name.toLowerCase()),
     );
     return classes;
   }
@@ -149,6 +167,7 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
             id: doc.data()['id'] as int,
             classId: classId,
             name: doc.data()['name'] as String? ?? '',
+            isActive: doc.data()['isActive'] as bool? ?? true,
           ),
         )
         .toList();
@@ -163,10 +182,15 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     final collection = await _collection('classes');
     final id = schoolClass.id == 0 ? _newId() : schoolClass.id;
     final name = schoolClass.name.trim();
-    final duplicate = await collection
-        .where('nameKey', isEqualTo: name.toLowerCase())
-        .get();
-    if (duplicate.docs.any((doc) => doc.id != '$id')) {
+    final duplicate = await collection.get();
+    if (duplicate.docs.any(
+      (doc) =>
+          doc.id != '$id' &&
+          ((doc.data()['nameKey'] as String?) ??
+                      (doc.data()['name'] as String? ?? ''))
+                  .toLowerCase() ==
+              name.toLowerCase(),
+    )) {
       throw const DuplicateSchoolRecordException(
         'That class name is already in use.',
       );
@@ -175,19 +199,17 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       'id': id,
       'name': name,
       'nameKey': name.toLowerCase(),
-    });
+      'isActive': schoolClass.isActive,
+      'sortOrder': schoolClass.sortOrder,
+      'subjectIds': schoolClass.subjectIds.toSet().toList(),
+    }, SetOptions(merge: true));
   }
 
   @override
-  Future<void> deleteClass(int id) async {
-    final ref = (await _collection('classes')).doc('$id');
-    final sections = await ref.collection('sections').get();
-    final batch = _firestore.batch();
-    for (final section in sections.docs) {
-      batch.delete(section.reference);
-    }
-    batch.delete(ref);
-    await batch.commit();
+  Future<void> setClassActive(int id, bool isActive) async {
+    await (await _collection(
+      'classes',
+    )).doc('$id').update({'isActive': isActive});
   }
 
   @override
@@ -199,10 +221,15 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     final collection = parent.collection('sections');
     final id = section.id == 0 ? _newId() : section.id;
     final name = section.name.trim();
-    final duplicate = await collection
-        .where('nameKey', isEqualTo: name.toLowerCase())
-        .get();
-    if (duplicate.docs.any((doc) => doc.id != '$id')) {
+    final duplicate = await collection.get();
+    if (duplicate.docs.any(
+      (doc) =>
+          doc.id != '$id' &&
+          ((doc.data()['nameKey'] as String?) ??
+                      (doc.data()['name'] as String? ?? ''))
+                  .toLowerCase() ==
+              name.toLowerCase(),
+    )) {
       throw const DuplicateSchoolRecordException(
         'That section name is already in use.',
       );
@@ -211,16 +238,17 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       'id': id,
       'name': name,
       'nameKey': name.toLowerCase(),
-    });
+      'isActive': section.isActive,
+    }, SetOptions(merge: true));
   }
 
   @override
-  Future<void> deleteSection(int id) async {
+  Future<void> setSectionActive(int id, bool isActive) async {
     final classes = await (await _collection('classes')).get();
     for (final schoolClass in classes.docs) {
       final section = schoolClass.reference.collection('sections').doc('$id');
       if ((await section.get()).exists) {
-        await section.delete();
+        await section.update({'isActive': isActive});
         return;
       }
     }
@@ -516,6 +544,27 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
   Future<void> saveTimetableEntry(TimetableEntry entry) async {
     final collection = await _collection('timetables');
     final id = entry.id ?? _newId();
+    final teachers = await getTeachers();
+    final classes = await getClasses();
+    final sections = entry.sectionId == null
+        ? const <SchoolSection>[]
+        : await getSections(entry.classId);
+    final subjects = await getSubjects();
+    validateTimetableEntryEligibility(
+      entry: entry,
+      teacher: firstOrNull(
+        teachers.where((item) => item.id == entry.teacherId),
+      ),
+      schoolClass: firstOrNull(
+        classes.where((item) => item.id == entry.classId),
+      ),
+      section: entry.sectionId == null
+          ? null
+          : firstOrNull(sections.where((item) => item.id == entry.sectionId)),
+      subject: firstOrNull(
+        subjects.where((item) => item.id == entry.subjectId),
+      ),
+    );
     final existing = await collection.get();
     validateTimetableEntryConflicts(
       existing.docs

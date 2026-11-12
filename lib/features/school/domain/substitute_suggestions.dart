@@ -10,6 +10,8 @@ class SubstituteSuggestion {
     required this.dutiesToday,
     required this.priorDuties,
     required this.hasSubjectExperience,
+    required this.hasClassExperience,
+    required this.hasSectionExperience,
   });
 
   final Teacher teacher;
@@ -18,16 +20,20 @@ class SubstituteSuggestion {
   final int dutiesToday;
   final int priorDuties;
   final bool hasSubjectExperience;
+  final bool hasClassExperience;
+  final bool hasSectionExperience;
 
   bool get requiresOverride =>
       isOccupied || dutiesToday >= defaultMaximumDailySubstitutions;
 
   int get _rank =>
-      (hasDutyConflict ? 20000 : 0) +
-      (isOccupied ? 10000 : 0) +
+      (hasDutyConflict ? 1000000 : 0) +
+      (isOccupied ? 100000 : 0) +
+      (hasSubjectExperience ? 0 : 1000) +
       dutiesToday * 100 +
       priorDuties * 5 -
-      (hasSubjectExperience ? 20 : 0);
+      (hasClassExperience ? 20 : 0) -
+      (hasSectionExperience ? 40 : 0);
 }
 
 List<SubstituteSuggestion> suggestSubstituteTeachers({
@@ -40,6 +46,8 @@ List<SubstituteSuggestion> suggestSubstituteTeachers({
   required int dayOfWeek,
   required DateTime date,
   required int subjectId,
+  int classId = -1,
+  int? sectionId,
   int? replacingAssignmentId,
 }) {
   final dateKey = schoolDateKey(date);
@@ -86,9 +94,22 @@ List<SubstituteSuggestion> suggestSubstituteTeachers({
               assignment.dateKey.compareTo(dateKey) < 0,
         )
         .length;
-    final hasSubjectExperience = lessons.any(
-      (lesson) => lesson.teacherId == id && lesson.subjectId == subjectId,
+    final hasSubjectExperience =
+        teacher.subjectIds.contains(subjectId) ||
+        lessons.any(
+          (lesson) => lesson.teacherId == id && lesson.subjectId == subjectId,
+        );
+    final hasClassExperience = lessons.any(
+      (lesson) => lesson.teacherId == id && lesson.classId == classId,
     );
+    final hasSectionExperience =
+        sectionId != null &&
+        lessons.any(
+          (lesson) =>
+              lesson.teacherId == id &&
+              lesson.classId == classId &&
+              lesson.sectionId == sectionId,
+        );
     suggestions.add(
       SubstituteSuggestion(
         teacher: teacher,
@@ -97,6 +118,8 @@ List<SubstituteSuggestion> suggestSubstituteTeachers({
         dutiesToday: teacherDutiesToday.length,
         priorDuties: priorDuties,
         hasSubjectExperience: hasSubjectExperience,
+        hasClassExperience: hasClassExperience,
+        hasSectionExperience: hasSectionExperience,
       ),
     );
   }

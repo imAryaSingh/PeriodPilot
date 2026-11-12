@@ -21,6 +21,72 @@ TimetableEntry lesson({
 );
 
 void main() {
+  group('validateTimetableEntryEligibility', () {
+    final entry = lesson(classId: 1, sectionId: 2, teacherId: 3);
+    const teacher = Teacher(
+      id: 3,
+      fullName: 'Teacher',
+      staffCode: '',
+      email: '',
+      phone: '',
+      isActive: true,
+      subjectIds: [1],
+    );
+    const schoolClass = SchoolClass(id: 1, name: 'Class 1', subjectIds: [1]);
+    const section = SchoolSection(id: 2, classId: 1, name: 'A');
+    const subject = Subject(id: 1, name: 'Math', code: '', isActive: true);
+
+    test('accepts enabled teacher, subject, class, and section links', () {
+      expect(
+        () => validateTimetableEntryEligibility(
+          entry: entry,
+          teacher: teacher,
+          schoolClass: schoolClass,
+          section: section,
+          subject: subject,
+        ),
+        returnsNormally,
+      );
+    });
+
+    test('rejects subjects not assigned to the teacher', () {
+      expect(
+        () => validateTimetableEntryEligibility(
+          entry: entry,
+          teacher: const Teacher(
+            id: 3,
+            fullName: 'Teacher',
+            staffCode: '',
+            email: '',
+            phone: '',
+            isActive: true,
+          ),
+          schoolClass: schoolClass,
+          section: section,
+          subject: subject,
+        ),
+        throwsA(isA<SchoolDataException>()),
+      );
+    });
+
+    test('rejects subjects disabled for the selected class', () {
+      expect(
+        () => validateTimetableEntryEligibility(
+          entry: entry,
+          teacher: teacher,
+          schoolClass: const SchoolClass(
+            id: 1,
+            name: 'Class 1',
+            subjectIds: [9],
+          ),
+          section: section,
+          subject: subject,
+        ),
+        throwsA(isA<SchoolDataException>()),
+      );
+    });
+  });
+
   group('validateTimetableEntryConflicts', () {
     test('prevents a teacher from being assigned to two classes at once', () {
       expect(

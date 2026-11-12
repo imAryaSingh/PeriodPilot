@@ -2,13 +2,18 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:teacher_substitute/features/school/domain/school_models.dart';
 import 'package:teacher_substitute/features/school/domain/substitute_suggestions.dart';
 
-Teacher teacher(int id, {bool active = true}) => Teacher(
+Teacher teacher(
+  int id, {
+  bool active = true,
+  List<int> subjectIds = const [],
+}) => Teacher(
   id: id,
   fullName: 'Teacher $id',
   staffCode: '$id',
   email: '',
   phone: '',
   isActive: active,
+  subjectIds: subjectIds,
 );
 
 TimetableEntry lesson({
@@ -16,10 +21,12 @@ TimetableEntry lesson({
   required int subjectId,
   int day = 1,
   int period = 1,
+  int classId = 1,
+  int? sectionId,
 }) => TimetableEntry(
   id: teacherId * 10 + period,
-  classId: 1,
-  sectionId: null,
+  classId: classId,
+  sectionId: sectionId,
   subjectId: subjectId,
   teacherId: teacherId,
   periodId: period,
@@ -159,5 +166,48 @@ void main() {
 
     expect(suggestions.single.dutiesToday, 0);
     expect(suggestions.single.priorDuties, 0);
+  });
+
+  test('ranks subject-qualified teachers ahead of fallback candidates', () {
+    final suggestions = suggestSubstituteTeachers(
+      teachers: [
+        teacher(1),
+        teacher(2, subjectIds: [8]),
+      ],
+      timetable: [],
+      absences: [absence(99)],
+      assignments: [],
+      absentTeacherId: 99,
+      periodId: 1,
+      dayOfWeek: date.weekday,
+      date: date,
+      subjectId: 8,
+      classId: 4,
+      sectionId: 2,
+    );
+    expect(suggestions.map((item) => item.teacher.id), [2, 1]);
+    expect(suggestions.first.hasSubjectExperience, isTrue);
+  });
+
+  test('recognizes teachers with relevant class and section experience', () {
+    final suggestions = suggestSubstituteTeachers(
+      teachers: [teacher(1), teacher(2)],
+      timetable: [
+        lesson(teacherId: 2, subjectId: 8, classId: 4, sectionId: 2, day: 2),
+      ],
+      absences: [absence(99)],
+      assignments: [],
+      absentTeacherId: 99,
+      periodId: 1,
+      dayOfWeek: date.weekday,
+      date: date,
+      subjectId: 8,
+      classId: 4,
+      sectionId: 2,
+    );
+    final experienced = suggestions.firstWhere((item) => item.teacher.id == 2);
+    expect(experienced.hasClassExperience, isTrue);
+    expect(experienced.hasSectionExperience, isTrue);
+    expect(experienced.hasSubjectExperience, isTrue);
   });
 }

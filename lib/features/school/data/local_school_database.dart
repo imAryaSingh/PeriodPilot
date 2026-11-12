@@ -15,7 +15,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
     final basePath = await getDatabasesPath();
     return openDatabase(
       path.join(basePath, 'teacher_substitute.db'),
-      version: 6,
+      version: 8,
       onConfigure: (database) => database.execute('PRAGMA foreign_keys = ON'),
       onCreate: (database, version) async {
         await database.execute('''
@@ -37,6 +37,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
             email TEXT NOT NULL DEFAULT '',
             phone TEXT NOT NULL DEFAULT '',
             is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            subject_ids TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE RESTRICT,
@@ -48,6 +49,9 @@ class LocalSchoolDatabase implements SchoolDatabase {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             school_id INTEGER NOT NULL DEFAULT 1,
             name TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            subject_ids TEXT NOT NULL DEFAULT '',
             FOREIGN KEY (school_id) REFERENCES schools(id) ON DELETE RESTRICT,
             UNIQUE (school_id, name)
           )
@@ -57,6 +61,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             class_id INTEGER NOT NULL,
             name TEXT NOT NULL,
+            is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
             FOREIGN KEY (class_id) REFERENCES classes(id) ON DELETE CASCADE,
             UNIQUE (class_id, name)
           )
@@ -95,6 +100,25 @@ class LocalSchoolDatabase implements SchoolDatabase {
           }
           await database.execute(
             'UPDATE periods SET sort_order = start_minute',
+          );
+        }
+        if (oldVersion < 7) {
+          await database.execute(
+            "ALTER TABLE teachers ADD COLUMN subject_ids TEXT NOT NULL DEFAULT ''",
+          );
+          await database.execute(
+            'ALTER TABLE classes ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))',
+          );
+          await database.execute(
+            'ALTER TABLE classes ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0',
+          );
+          await database.execute(
+            'ALTER TABLE sections ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1))',
+          );
+        }
+        if (oldVersion < 8) {
+          await database.execute(
+            "ALTER TABLE classes ADD COLUMN subject_ids TEXT NOT NULL DEFAULT ''",
           );
         }
       },
@@ -238,6 +262,7 @@ class LocalSchoolDatabase implements SchoolDatabase {
       'email': teacher.email.trim(),
       'phone': teacher.phone.trim(),
       'is_active': teacher.isActive ? 1 : 0,
+      'subject_ids': teacher.subjectIds.join(','),
       'updated_at': now,
     };
     if (teacher.id == null) {
@@ -269,7 +294,10 @@ class LocalSchoolDatabase implements SchoolDatabase {
   @override
   Future<List<SchoolClass>> getClasses() async {
     final db = await database;
-    final rows = await db.query('classes', orderBy: 'name COLLATE NOCASE');
+    final rows = await db.query(
+      'classes',
+      orderBy: 'sort_order, name COLLATE NOCASE',
+    );
     return rows.map(SchoolClass.fromMap).toList(growable: false);
   }
 
@@ -288,12 +316,33 @@ class LocalSchoolDatabase implements SchoolDatabase {
   @override
   Future<void> saveClass(SchoolClass schoolClass) async {
     final db = await database;
+    final existing = await db.query('classes');
+    if (existing.any(
+      (row) =>
+          row['id'] != schoolClass.id &&
+          (row['name'] as String? ?? '').trim().toLowerCase() ==
+              schoolClass.name.trim().toLowerCase(),
+    )) {
+      throw const DuplicateSchoolRecordException(
+        'That class name is already in use.',
+      );
+    }
     if (schoolClass.id == 0) {
-      await db.insert('classes', {'name': schoolClass.name.trim()});
+      await db.insert('classes', {
+        'name': schoolClass.name.trim(),
+        'is_active': schoolClass.isActive ? 1 : 0,
+        'sort_order': schoolClass.sortOrder,
+        'subject_ids': schoolClass.subjectIds.toSet().join(','),
+      });
     } else {
       await db.update(
         'classes',
-        {'name': schoolClass.name.trim()},
+        {
+          'name': schoolClass.name.trim(),
+          'is_active': schoolClass.isActive ? 1 : 0,
+          'sort_order': schoolClass.sortOrder,
+          'subject_ids': schoolClass.subjectIds.toSet().join(','),
+        },
         where: 'id = ?',
         whereArgs: [schoolClass.id],
       );
@@ -301,23 +350,44 @@ class LocalSchoolDatabase implements SchoolDatabase {
   }
 
   @override
-  Future<void> deleteClass(int id) async {
+  Future<void> setClassActive(int id, bool isActive) async {
     final db = await database;
-    await db.delete('classes', where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'classes',
+      {'is_active': isActive ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   @override
   Future<void> saveSection(SchoolSection section) async {
     final db = await database;
+    final existing = await db.query(
+      'sections',
+      where: 'class_id = ?',
+      whereArgs: [section.classId],
+    );
+    if (existing.any(
+      (row) =>
+          row['id'] != section.id &&
+          (row['name'] as String? ?? '').trim().toLowerCase() ==
+              section.name.trim().toLowerCase(),
+    )) {
+      throw const DuplicateSchoolRecordException(
+        'That section name is already in use.',
+      );
+    }
     if (section.id == 0) {
       await db.insert('sections', {
         'class_id': section.classId,
         'name': section.name.trim(),
+        'is_active': section.isActive ? 1 : 0,
       });
     } else {
       await db.update(
         'sections',
-        {'name': section.name.trim()},
+        {'name': section.name.trim(), 'is_active': section.isActive ? 1 : 0},
         where: 'id = ?',
         whereArgs: [section.id],
       );
@@ -325,9 +395,14 @@ class LocalSchoolDatabase implements SchoolDatabase {
   }
 
   @override
-  Future<void> deleteSection(int id) async {
+  Future<void> setSectionActive(int id, bool isActive) async {
     final db = await database;
-    await db.delete('sections', where: 'id = ?', whereArgs: [id]);
+    await db.update(
+      'sections',
+      {'is_active': isActive ? 1 : 0},
+      where: 'id = ?',
+      whereArgs: [id],
+    );
   }
 
   @override
@@ -596,6 +671,27 @@ class LocalSchoolDatabase implements SchoolDatabase {
   @override
   Future<void> saveTimetableEntry(TimetableEntry entry) async {
     final db = await database;
+    final teachers = await getTeachers();
+    final classes = await getClasses();
+    final sections = entry.sectionId == null
+        ? const <SchoolSection>[]
+        : await getSections(entry.classId);
+    final subjects = await getSubjects();
+    validateTimetableEntryEligibility(
+      entry: entry,
+      teacher: firstOrNull(
+        teachers.where((item) => item.id == entry.teacherId),
+      ),
+      schoolClass: firstOrNull(
+        classes.where((item) => item.id == entry.classId),
+      ),
+      section: entry.sectionId == null
+          ? null
+          : firstOrNull(sections.where((item) => item.id == entry.sectionId)),
+      subject: firstOrNull(
+        subjects.where((item) => item.id == entry.subjectId),
+      ),
+    );
     final values = {
       'class_id': entry.classId,
       'section_id': entry.sectionId,
