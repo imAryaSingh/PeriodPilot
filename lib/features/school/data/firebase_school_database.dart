@@ -541,48 +541,95 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
   }
 
   @override
-  Future<void> saveTimetableEntry(TimetableEntry entry) async {
+  Future<void> saveTimetableEntry(TimetableEntry entry) =>
+      saveTimetableEntries([entry]);
+
+  @override
+  Future<void> saveTimetableEntries(List<TimetableEntry> entries) async {
+    if (entries.isEmpty) return;
+    if (entries.length > 450) {
+      throw const SchoolDataException(
+        'Save no more than 450 timetable periods at a time.',
+      );
+    }
     final collection = await _collection('timetables');
-    final id = entry.id ?? _newId();
-    final teachers = await getTeachers();
-    final classes = await getClasses();
-    final sections = entry.sectionId == null
-        ? const <SchoolSection>[]
-        : await getSections(entry.classId);
-    final subjects = await getSubjects();
-    validateTimetableEntryEligibility(
-      entry: entry,
-      teacher: firstOrNull(
-        teachers.where((item) => item.id == entry.teacherId),
-      ),
-      schoolClass: firstOrNull(
-        classes.where((item) => item.id == entry.classId),
-      ),
-      section: entry.sectionId == null
-          ? null
-          : firstOrNull(sections.where((item) => item.id == entry.sectionId)),
-      subject: firstOrNull(
-        subjects.where((item) => item.id == entry.subjectId),
-      ),
-    );
-    final existing = await collection.get();
-    validateTimetableEntryConflicts(
-      existing.docs
-          .map((doc) => TimetableEntry.fromMap(doc.data()))
-          .where((existingEntry) => existingEntry.id != id),
-      entry,
-    );
-    await collection.doc('$id').set({
-      'id': id,
-      'classId': entry.classId,
-      'sectionId': entry.sectionId,
-      'subjectId': entry.subjectId,
-      'teacherId': entry.teacherId,
-      'periodId': entry.periodId,
-      'dayOfWeek': entry.dayOfWeek,
-      'room': entry.room.trim(),
-      'updatedAt': FieldValue.serverTimestamp(),
-    }, SetOptions(merge: true));
+    final schoolId = await _currentSchoolId;
+    final results = await Future.wait<Object>([
+      getTeachers(),
+      getClasses(),
+      getSubjects(),
+      collection.get(),
+    ]);
+    final teachers = results[0] as List<Teacher>;
+    final classes = results[1] as List<SchoolClass>;
+    final subjects = results[2] as List<Subject>;
+    final existingSnapshot = results[3] as QuerySnapshot<Map<String, dynamic>>;
+    final existing = existingSnapshot.docs
+        .map((doc) => TimetableEntry.fromMap(doc.data()))
+        .toList();
+    final oldDataById = {
+      for (final doc in existingSnapshot.docs)
+        (doc.data()['id'] as num).toInt(): doc.data(),
+    };
+    final sectionsByClass = <int, List<SchoolSection>>{};
+    for (final classId
+        in entries
+            .where((entry) => entry.sectionId != null)
+            .map((entry) => entry.classId)
+            .toSet()) {
+      sectionsByClass[classId] = await getSections(classId);
+    }
+    final normalized = <TimetableEntry>[];
+    final usedIds = <int>{};
+    for (final entry in entries) {
+      final id = entry.id ?? _newId();
+      if (!usedIds.add(id)) {
+        throw const DuplicateSchoolRecordException(
+          'A timetable entry was included more than once in this save.',
+        );
+      }
+      final candidate = _withTimetableId(entry, id);
+      validateTimetableEntryEligibility(
+        entry: candidate,
+        teacher: firstOrNull(
+          teachers.where((item) => item.id == entry.teacherId),
+        ),
+        schoolClass: firstOrNull(
+          classes.where((item) => item.id == entry.classId),
+        ),
+        section: entry.sectionId == null
+            ? null
+            : firstOrNull(
+                (sectionsByClass[entry.classId] ?? const <SchoolSection>[])
+                    .where((item) => item.id == entry.sectionId),
+              ),
+        subject: firstOrNull(
+          subjects.where((item) => item.id == entry.subjectId),
+        ),
+      );
+      validateTimetableEntryConflicts(existing, candidate);
+      existing.add(candidate);
+      normalized.add(candidate);
+    }
+    final batch = _firestore.batch();
+    for (final entry in normalized) {
+      final old = oldDataById[entry.id];
+      batch.set(collection.doc('${entry.id}'), {
+        'id': entry.id,
+        'schoolId': schoolId,
+        'classId': entry.classId,
+        'sectionId': entry.sectionId,
+        'subjectId': entry.subjectId,
+        'teacherId': entry.teacherId,
+        'periodId': entry.periodId,
+        'dayOfWeek': entry.dayOfWeek,
+        'isActive': true,
+        'room': entry.room.trim(),
+        'createdAt': old?['createdAt'] ?? FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      }, SetOptions(merge: true));
+    }
+    await batch.commit();
   }
 
   @override
@@ -609,6 +656,16 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       return date != 0 ? date : (b.id ?? 0).compareTo(a.id ?? 0);
     });
     return absences;
+  }
+
+  @override
+  Future<List<TeacherAbsence>> getAbsencesForDate(DateTime date) async {
+    final snapshot = await (await _collection(
+      'attendance',
+    )).where('dateKey', isEqualTo: schoolDateKey(date)).get();
+    return snapshot.docs
+        .map((doc) => TeacherAbsence.fromMap(doc.data()))
+        .toList(growable: false);
   }
 
   @override
@@ -659,6 +716,41 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       'createdAt': old.data()?['createdAt'] ?? FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     }, SetOptions(merge: true));
+  }
+
+  @override
+  Future<void> saveAbsences(List<TeacherAbsence> absences) async {
+    if (absences.isEmpty) return;
+    final collection = await _collection('attendance');
+    final existing = await collection.get();
+    final existingKeys = existing.docs
+        .map((doc) => doc.data())
+        .map((data) => '${data['teacherId']}:${data['dateKey']}')
+        .toSet();
+    final selectedKeys = <String>{};
+    for (final absence in absences) {
+      final key = '${absence.teacherId}:${schoolDateKey(absence.date)}';
+      if (!selectedKeys.add(key) || existingKeys.contains(key)) {
+        throw const DuplicateSchoolRecordException(
+          'One or more teachers already have an absence record for that date.',
+        );
+      }
+    }
+    final batch = _firestore.batch();
+    for (final absence in absences) {
+      final id = _newId();
+      final ref = collection.doc('$id');
+      batch.set(ref, {
+        'id': id,
+        'teacherId': absence.teacherId,
+        'dateKey': schoolDateKey(absence.date),
+        'type': absence.type.key,
+        'notes': absence.notes.trim(),
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
   }
 
   @override
@@ -873,3 +965,14 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     }
   }
 }
+
+TimetableEntry _withTimetableId(TimetableEntry entry, int id) => TimetableEntry(
+  id: id,
+  classId: entry.classId,
+  sectionId: entry.sectionId,
+  subjectId: entry.subjectId,
+  teacherId: entry.teacherId,
+  periodId: entry.periodId,
+  dayOfWeek: entry.dayOfWeek,
+  room: entry.room,
+);

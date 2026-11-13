@@ -261,6 +261,15 @@ class TeacherAbsence {
   );
 }
 
+int countAbsentTeachersForDate(
+  Iterable<TeacherAbsence> absences,
+  DateTime date,
+) => absences
+    .where((absence) => absence.dateKey == schoolDateKey(date))
+    .map((absence) => absence.teacherId)
+    .toSet()
+    .length;
+
 enum SubstitutionStatus { assigned, cancelled }
 
 class SubstitutionAssignment {

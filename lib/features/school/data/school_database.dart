@@ -29,9 +29,12 @@ abstract interface class SchoolDatabase {
   Future<void> saveWorkingDays(List<int> days);
   Future<List<TimetableEntry>> getTimetableEntries();
   Future<void> saveTimetableEntry(TimetableEntry entry);
+  Future<void> saveTimetableEntries(List<TimetableEntry> entries);
   Future<void> deleteTimetableEntry(int id);
   Future<List<TeacherAbsence>> getAbsences();
+  Future<List<TeacherAbsence>> getAbsencesForDate(DateTime date);
   Future<void> saveAbsence(TeacherAbsence absence);
+  Future<void> saveAbsences(List<TeacherAbsence> absences);
   Future<void> deleteAbsence(int id);
   Future<List<SubstitutionAssignment>> getSubstitutions();
   Future<void> saveSubstitution(SubstitutionAssignment assignment);
@@ -134,11 +137,6 @@ void validateTimetableEntryEligibility({
   }
   if (subject == null || !subject.isActive) {
     throw const SchoolDataException('Choose an enabled subject.');
-  }
-  if (!teacher.subjectIds.contains(entry.subjectId)) {
-    throw const SchoolDataException(
-      'Assign this subject to the teacher before adding the timetable lesson.',
-    );
   }
   if (schoolClass.subjectIds.isNotEmpty &&
       !schoolClass.subjectIds.contains(entry.subjectId)) {

@@ -669,57 +669,68 @@ class LocalSchoolDatabase implements SchoolDatabase {
   }
 
   @override
-  Future<void> saveTimetableEntry(TimetableEntry entry) async {
+  Future<void> saveTimetableEntry(TimetableEntry entry) =>
+      saveTimetableEntries([entry]);
+
+  @override
+  Future<void> saveTimetableEntries(List<TimetableEntry> entries) async {
+    if (entries.isEmpty) return;
     final db = await database;
     final teachers = await getTeachers();
     final classes = await getClasses();
-    final sections = entry.sectionId == null
-        ? const <SchoolSection>[]
-        : await getSections(entry.classId);
     final subjects = await getSubjects();
-    validateTimetableEntryEligibility(
-      entry: entry,
-      teacher: firstOrNull(
-        teachers.where((item) => item.id == entry.teacherId),
-      ),
-      schoolClass: firstOrNull(
-        classes.where((item) => item.id == entry.classId),
-      ),
-      section: entry.sectionId == null
-          ? null
-          : firstOrNull(sections.where((item) => item.id == entry.sectionId)),
-      subject: firstOrNull(
-        subjects.where((item) => item.id == entry.subjectId),
-      ),
-    );
-    final values = {
-      'class_id': entry.classId,
-      'section_id': entry.sectionId,
-      'subject_id': entry.subjectId,
-      'teacher_id': entry.teacherId,
-      'period_id': entry.periodId,
-      'day_of_week': entry.dayOfWeek,
-      'room': entry.room.trim(),
-    };
+    final sectionsByClass = <int, List<SchoolSection>>{};
+    for (final classId
+        in entries
+            .where((entry) => entry.sectionId != null)
+            .map((entry) => entry.classId)
+            .toSet()) {
+      sectionsByClass[classId] = await getSections(classId);
+    }
     await db.transaction((txn) async {
-      final conflicts = await txn.query(
+      final existing = (await txn.query(
         'timetable_entries',
-        where: 'day_of_week = ? AND period_id = ? AND id != COALESCE(?, -1)',
-        whereArgs: [entry.dayOfWeek, entry.periodId, entry.id],
-      );
-      validateTimetableEntryConflicts(
-        conflicts.map(TimetableEntry.fromMap),
-        entry,
-      );
-      if (entry.id == null) {
-        await txn.insert('timetable_entries', values);
-      } else {
-        await txn.update(
-          'timetable_entries',
-          values,
-          where: 'id = ?',
-          whereArgs: [entry.id],
+      )).map(TimetableEntry.fromMap).toList();
+      for (final entry in entries) {
+        validateTimetableEntryEligibility(
+          entry: entry,
+          teacher: firstOrNull(
+            teachers.where((item) => item.id == entry.teacherId),
+          ),
+          schoolClass: firstOrNull(
+            classes.where((item) => item.id == entry.classId),
+          ),
+          section: entry.sectionId == null
+              ? null
+              : firstOrNull(
+                  (sectionsByClass[entry.classId] ?? const <SchoolSection>[])
+                      .where((item) => item.id == entry.sectionId),
+                ),
+          subject: firstOrNull(
+            subjects.where((item) => item.id == entry.subjectId),
+          ),
         );
+        validateTimetableEntryConflicts(existing, entry);
+        existing.add(entry);
+        final values = {
+          'class_id': entry.classId,
+          'section_id': entry.sectionId,
+          'subject_id': entry.subjectId,
+          'teacher_id': entry.teacherId,
+          'period_id': entry.periodId,
+          'day_of_week': entry.dayOfWeek,
+          'room': entry.room.trim(),
+        };
+        if (entry.id == null) {
+          await txn.insert('timetable_entries', values);
+        } else {
+          await txn.update(
+            'timetable_entries',
+            values,
+            where: 'id = ?',
+            whereArgs: [entry.id],
+          );
+        }
       }
     });
   }
@@ -748,6 +759,18 @@ class LocalSchoolDatabase implements SchoolDatabase {
     final rows = await db.query(
       'attendance_records',
       orderBy: 'date DESC, id DESC',
+    );
+    return rows.map(TeacherAbsence.fromMap).toList(growable: false);
+  }
+
+  @override
+  Future<List<TeacherAbsence>> getAbsencesForDate(DateTime date) async {
+    final db = await database;
+    final rows = await db.query(
+      'attendance_records',
+      where: 'date = ?',
+      whereArgs: [schoolDateKey(date)],
+      orderBy: 'id DESC',
     );
     return rows.map(TeacherAbsence.fromMap).toList(growable: false);
   }
@@ -807,6 +830,45 @@ class LocalSchoolDatabase implements SchoolDatabase {
           where: 'id = ?',
           whereArgs: [absence.id],
         );
+      }
+    });
+  }
+
+  @override
+  Future<void> saveAbsences(List<TeacherAbsence> absences) async {
+    if (absences.isEmpty) return;
+    final db = await database;
+    final now = DateTime.now().toUtc().toIso8601String();
+    final seen = <String>{};
+    await db.transaction((txn) async {
+      for (final absence in absences) {
+        final date = schoolDateKey(absence.date);
+        final key = '${absence.teacherId}:$date';
+        if (!seen.add(key)) {
+          throw const DuplicateSchoolRecordException(
+            'A teacher was selected more than once for this date.',
+          );
+        }
+        final duplicate = await txn.query(
+          'attendance_records',
+          columns: ['id'],
+          where: 'teacher_id = ? AND date = ?',
+          whereArgs: [absence.teacherId, date],
+          limit: 1,
+        );
+        if (duplicate.isNotEmpty) {
+          throw const DuplicateSchoolRecordException(
+            'One or more teachers already have an absence record for that date.',
+          );
+        }
+        await txn.insert('attendance_records', {
+          'teacher_id': absence.teacherId,
+          'date': date,
+          'type': absence.type.key,
+          'notes': absence.notes.trim(),
+          'created_at': now,
+          'updated_at': now,
+        });
       }
     });
   }

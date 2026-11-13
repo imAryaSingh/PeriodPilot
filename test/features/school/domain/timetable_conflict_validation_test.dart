@@ -49,7 +49,7 @@ void main() {
       );
     });
 
-    test('rejects subjects not assigned to the teacher', () {
+    test('allows a subject fallback when no qualified teacher is selected', () {
       expect(
         () => validateTimetableEntryEligibility(
           entry: entry,
@@ -65,7 +65,7 @@ void main() {
           section: section,
           subject: subject,
         ),
-        throwsA(isA<SchoolDataException>()),
+        returnsNormally,
       );
     });
 

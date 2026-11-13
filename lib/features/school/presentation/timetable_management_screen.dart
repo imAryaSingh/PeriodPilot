@@ -977,7 +977,8 @@ class _TimetablesTabState extends State<_TimetablesTab> {
   _TimetableView _view = _TimetableView.classView;
   int? _classId;
   int? _teacherId;
-  int? _day;
+  late Set<int> _selectedDays;
+  late int _activeDay;
   int _sectionId = 0;
   late Future<List<SchoolSection>> _sections;
 
@@ -986,7 +987,8 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     super.initState();
     _classId = _firstActiveClass;
     _teacherId = _firstActiveTeacher;
-    _day = _firstDay;
+    _selectedDays = {_firstDay};
+    _activeDay = _firstDay;
     _sections = _loadSections();
   }
 
@@ -1015,7 +1017,11 @@ class _TimetablesTabState extends State<_TimetablesTab> {
       if (!widget.data.teachers.any((item) => item.id == _teacherId)) {
         _teacherId = _firstActiveTeacher;
       }
-      if (!widget.data.workingDays.contains(_day)) _day = _firstDay;
+      _selectedDays.removeWhere(
+        (day) => !widget.data.workingDays.contains(day),
+      );
+      if (_selectedDays.isEmpty) _selectedDays = {_firstDay};
+      if (!_selectedDays.contains(_activeDay)) _activeDay = _selectedDays.first;
       _sections = _loadSections();
     }
   }
@@ -1025,21 +1031,28 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     return context.read<SchoolDatabase>().getSections(_classId!);
   }
 
-  Future<void> _openEditor({TimetableEntry? entry, int? periodId}) async {
-    final result = await showDialog<TimetableEntry>(
+  Future<void> _openEditor({
+    TimetableEntry? entry,
+    int? periodId,
+    Set<int>? initialDays,
+  }) async {
+    final result = await showDialog<List<TimetableEntry>>(
       context: context,
       builder: (_) => _TimetableEntryDialog(
         entry: entry,
         data: widget.data,
         initialClassId: _view == _TimetableView.classView ? _classId : null,
         initialTeacherId: _teacherId,
-        initialDay: _day ?? _firstDay,
+        initialDay: _activeDay,
+        initialDays: initialDays ?? {entry?.dayOfWeek ?? _activeDay},
         initialPeriodId: periodId,
       ),
     );
     if (result == null || !mounted) return;
     try {
-      await context.read<SchoolDatabase>().saveTimetableEntry(result);
+      final candidates = await _prepareEntriesForSave(result);
+      if (candidates == null || !mounted) return;
+      await context.read<SchoolDatabase>().saveTimetableEntries(candidates);
       widget.onReload();
     } catch (error) {
       if (mounted) _showMessage(context, _friendlyError(error));
@@ -1073,6 +1086,117 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     }
   }
 
+  List<int> get _daysForDisplay => _selectedDays.toList()..sort();
+
+  Future<void> _copyActiveDayPattern(_TimetableData data) async {
+    final targets = _daysForDisplay.where((day) => day != _activeDay).toList();
+    final source = data.entries.where((entry) {
+      if (entry.dayOfWeek != _activeDay) return false;
+      if (_view == _TimetableView.teacherView) {
+        return entry.teacherId == _teacherId;
+      }
+      return entry.classId == _classId &&
+          (_sectionId == 0 ||
+              entry.sectionId == null ||
+              entry.sectionId == _sectionId);
+    }).toList();
+    if (targets.isEmpty || source.isEmpty) {
+      _showMessage(context, 'The active day has no timetable pattern to copy.');
+      return;
+    }
+    final copies = [
+      for (final day in targets)
+        for (final entry in source)
+          TimetableEntry(
+            id: null,
+            classId: entry.classId,
+            sectionId: entry.sectionId,
+            subjectId: entry.subjectId,
+            teacherId: entry.teacherId,
+            periodId: entry.periodId,
+            dayOfWeek: day,
+            room: entry.room,
+          ),
+    ];
+    try {
+      final candidates = await _prepareEntriesForSave(copies);
+      if (candidates == null || !mounted) return;
+      await context.read<SchoolDatabase>().saveTimetableEntries(candidates);
+      widget.onReload();
+      if (mounted) _showMessage(context, 'Timetable pattern copied.');
+    } catch (error) {
+      if (mounted) _showMessage(context, _friendlyError(error));
+    }
+  }
+
+  Future<List<TimetableEntry>?> _prepareEntriesForSave(
+    List<TimetableEntry> entries,
+  ) async {
+    final existing = widget.data.entries;
+    final candidates = <TimetableEntry>[];
+    var replacementCount = 0;
+    for (final entry in entries) {
+      final colliding = existing.where((item) {
+        if (item.id == entry.id ||
+            item.dayOfWeek != entry.dayOfWeek ||
+            item.periodId != entry.periodId) {
+          return false;
+        }
+        final sameClassSlot =
+            item.classId == entry.classId &&
+            (item.sectionId == entry.sectionId ||
+                item.sectionId == null ||
+                entry.sectionId == null);
+        return sameClassSlot || item.teacherId == entry.teacherId;
+      }).toList();
+      final exactSlot = colliding.where(
+        (item) =>
+            item.classId == entry.classId && item.sectionId == entry.sectionId,
+      );
+      final replaceable = exactSlot.length == 1 ? exactSlot.first : null;
+      final nonReplaceable = colliding
+          .where((item) => item.id != replaceable?.id)
+          .toList();
+      if (nonReplaceable.isNotEmpty || exactSlot.length > 1) {
+        _showMessage(
+          context,
+          'This period conflicts with another class or teacher assignment. Edit that lesson first.',
+        );
+        return null;
+      }
+      if (replaceable != null) {
+        replacementCount++;
+        candidates.add(_withTimetableId(entry, replaceable.id!));
+      } else {
+        candidates.add(entry);
+      }
+    }
+    if (replacementCount > 0) {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (dialogContext) => AlertDialog(
+          title: const Text('Update existing timetable entries?'),
+          content: Text(
+            '$replacementCount selected day/period slot(s) already have a lesson. Replace those entries with the selected configuration?',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: const Text('Keep existing'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: const Text('Update entries'),
+            ),
+          ],
+        ),
+      );
+      if (confirmed != true || !mounted) return null;
+    }
+    if (!mounted) return null;
+    return candidates;
+  }
+
   @override
   Widget build(BuildContext context) {
     final data = widget.data;
@@ -1091,16 +1215,16 @@ class _TimetablesTabState extends State<_TimetablesTab> {
         data.classes
             .where((item) => item.isActive)
             .any(
-              (schoolClass) => chosenTeacher.subjectIds.any(
-                (id) =>
-                    data.subjects.any((s) => s.id == id && s.isActive) &&
+              (schoolClass) => data.subjects.any(
+                (subject) =>
+                    subject.isActive &&
                     (schoolClass.subjectIds.isEmpty ||
-                        schoolClass.subjectIds.contains(id)),
+                        schoolClass.subjectIds.contains(subject.id)),
               ),
             );
     final entries =
         data.entries.where((entry) {
-            if (entry.dayOfWeek != _day) return false;
+            if (!_selectedDays.contains(entry.dayOfWeek)) return false;
             if (_view == _TimetableView.teacherView) {
               return entry.teacherId == _teacherId;
             }
@@ -1159,6 +1283,42 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                 _teacherFilter(activeTeachers),
               const SizedBox(height: 10),
               _daySelector(data.workingDays),
+              if (_selectedDays.length > 1)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: DropdownButton<int>(
+                    value: _selectedDays.contains(_activeDay)
+                        ? _activeDay
+                        : _selectedDays.first,
+                    isDense: true,
+                    underline: const SizedBox.shrink(),
+                    hint: const Text('Choose source day'),
+                    items: _daysForDisplay
+                        .map(
+                          (day) => DropdownMenuItem(
+                            value: day,
+                            child: Text(
+                              'Copy pattern from ${schoolWeekdays[day]}',
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (day) {
+                      if (day != null) setState(() => _activeDay = day);
+                    },
+                  ),
+                ),
+              if (_selectedDays.length > 1)
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: () => _copyActiveDayPattern(data),
+                    icon: const Icon(Icons.copy_all_rounded),
+                    label: Text(
+                      'Copy ${schoolWeekdays[_activeDay]} pattern to selected days',
+                    ),
+                  ),
+                ),
             ],
           ),
         ),
@@ -1173,11 +1333,17 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                 )
               : ListView.builder(
                   padding: const EdgeInsets.fromLTRB(16, 10, 16, 20),
-                  itemCount: activePeriods.length,
+                  itemCount: activePeriods.length * _daysForDisplay.length,
                   itemBuilder: (context, index) {
-                    final period = activePeriods[index];
+                    final displayDays = _daysForDisplay;
+                    final day = displayDays[index ~/ activePeriods.length];
+                    final period = activePeriods[index % activePeriods.length];
                     final lessons = entries
-                        .where((entry) => entry.periodId == period.id)
+                        .where(
+                          (entry) =>
+                              entry.dayOfWeek == day &&
+                              entry.periodId == period.id,
+                        )
                         .toList();
                     return Card(
                       child: Padding(
@@ -1193,9 +1359,13 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                                 foregroundColor: Theme.of(
                                   context,
                                 ).colorScheme.onPrimaryContainer,
-                                child: Text('${index + 1}'),
+                                child: Text(
+                                  '${index % activePeriods.length + 1}',
+                                ),
                               ),
-                              title: Text(period.name),
+                              title: Text(
+                                '${schoolWeekdays[day]} · ${period.name}',
+                              ),
                               subtitle: Text(
                                 '${_formatMinute(period.startMinute)} – ${_formatMinute(period.endMinute)}',
                               ),
@@ -1203,8 +1373,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                                   ? const Chip(label: Text('Free period'))
                                   : null,
                             ),
-                            if (lessons.isEmpty &&
-                                _view == _TimetableView.teacherView)
+                            if (lessons.isEmpty)
                               Padding(
                                 padding: const EdgeInsets.fromLTRB(
                                   60,
@@ -1216,19 +1385,23 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                                   leading: const Icon(Icons.add_circle_outline),
                                   title: Text(
                                     hasLessonOptions
-                                        ? 'Assign class and subject'
+                                        ? _view == _TimetableView.teacherView
+                                              ? 'Assign class and subject'
+                                              : 'Assign subject and teacher'
                                         : 'Complete school setup first',
                                   ),
                                   subtitle: Text(
                                     hasLessonOptions
-                                        ? 'Tap to add a lesson for this teacher.'
-                                        : (chosenTeacher?.subjectIds.isEmpty ??
-                                              true)
-                                        ? 'Assign this teacher one or more subjects in School setup.'
-                                        : 'Add an active class and an active subject before assigning lessons.',
+                                        ? _view == _TimetableView.teacherView
+                                              ? 'Tap to add a lesson for this teacher.'
+                                              : 'Tap to assign this class period.'
+                                        : 'Add an active class and at least one active class subject before assigning lessons.',
                                   ),
                                   onTap: hasLessonOptions
-                                      ? () => _openEditor(periodId: period.id)
+                                      ? () => _openEditor(
+                                          periodId: period.id,
+                                          initialDays: {day},
+                                        )
                                       : null,
                                 ),
                               )
@@ -1241,9 +1414,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                                   8,
                                 ),
                                 child: Text(
-                                  _view == _TimetableView.teacherView
-                                      ? 'No class assigned during this period.'
-                                      : 'No lesson assigned during this period.',
+                                  'No lesson assigned during this period.',
                                   style: Theme.of(context).textTheme.bodySmall
                                       ?.copyWith(
                                         color: Theme.of(
@@ -1274,7 +1445,6 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     final needsCorrection =
         teacher == null ||
         !teacher.isActive ||
-        !teacher.subjectIds.contains(entry.subjectId) ||
         subject == null ||
         !subject.isActive ||
         schoolClass == null ||
@@ -1289,6 +1459,8 @@ class _TimetablesTabState extends State<_TimetablesTab> {
         '${schoolClass?.name ?? 'Class'}${section == null ? '' : ' · $section'}',
       if (_view == _TimetableView.classView)
         teacher?.fullName ?? 'Teacher unavailable',
+      if (teacher != null && !teacher.subjectIds.contains(entry.subjectId))
+        'Subject fallback',
       if (_view == _TimetableView.classView && section != null) section,
       if (entry.room.isNotEmpty) 'Room ${entry.room}',
     ];
@@ -1329,12 +1501,10 @@ class _TimetablesTabState extends State<_TimetablesTab> {
         'Add a class in School setup before creating a timetable.',
       );
     }
-    return Wrap(
-      spacing: 12,
-      runSpacing: 8,
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        SizedBox(
-          width: 220,
+        Expanded(
           child: DropdownButtonFormField<int>(
             initialValue: _classId,
             decoration: const InputDecoration(labelText: 'Class'),
@@ -1353,8 +1523,8 @@ class _TimetablesTabState extends State<_TimetablesTab> {
             },
           ),
         ),
-        SizedBox(
-          width: 220,
+        const SizedBox(width: 12),
+        Expanded(
           child: FutureBuilder<List<SchoolSection>>(
             future: _sections,
             builder: (context, snapshot) {
@@ -1408,20 +1578,41 @@ class _TimetablesTabState extends State<_TimetablesTab> {
   }
 
   Widget _daySelector(List<int> days) {
-    final available = days.isEmpty ? [1] : days;
+    final available = days.isEmpty ? [1] : days.toSet().toList()
+      ..sort();
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       child: Row(
-        children: available.map((day) {
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              label: Text(schoolWeekdays[day]!.substring(0, 3)),
-              selected: _day == day,
-              onSelected: (_) => setState(() => _day = day),
+        children:
+            available.map((day) {
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilterChip(
+                  label: Text(schoolWeekdays[day]!.substring(0, 3)),
+                  selected: _selectedDays.contains(day),
+                  onSelected: (selected) => setState(() {
+                    if (selected) {
+                      _selectedDays.add(day);
+                      _activeDay = day;
+                    } else if (_selectedDays.length > 1) {
+                      _selectedDays.remove(day);
+                      if (_activeDay == day) _activeDay = _selectedDays.first;
+                    }
+                  }),
+                ),
+              );
+            }).toList()..add(
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ActionChip(
+                  label: const Text('All days'),
+                  onPressed: () => setState(() {
+                    _selectedDays = available.toSet();
+                    _activeDay = available.first;
+                  }),
+                ),
+              ),
             ),
-          );
-        }).toList(),
       ),
     );
   }
@@ -1441,6 +1632,7 @@ class _TimetableEntryDialog extends StatefulWidget {
     required this.initialClassId,
     required this.initialTeacherId,
     required this.initialDay,
+    required this.initialDays,
     required this.initialPeriodId,
   });
 
@@ -1449,6 +1641,7 @@ class _TimetableEntryDialog extends StatefulWidget {
   final int? initialClassId;
   final int? initialTeacherId;
   final int initialDay;
+  final Set<int> initialDays;
   final int? initialPeriodId;
 
   @override
@@ -1462,7 +1655,7 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
   late int? _teacherId;
   int? _subjectId;
   late int? _periodId;
-  late int _day;
+  late Set<int> _days;
   late int _sectionId;
   late Future<List<SchoolSection>> _sections;
   String? _error;
@@ -1475,15 +1668,14 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
     _teacherId = entry?.teacherId ?? widget.initialTeacherId;
     _periodId = entry?.periodId ?? widget.initialPeriodId ?? _firstPeriod;
     _subjectId = entry?.subjectId ?? _firstSubject;
-    _day = entry?.dayOfWeek ?? widget.initialDay;
+    _days = entry == null ? widget.initialDays.toSet() : {entry.dayOfWeek};
+    if (_days.isEmpty) _days = {widget.initialDay};
     _sectionId = entry?.sectionId ?? 0;
     _room.text = entry?.room ?? '';
     _sections = _loadSections();
   }
 
   List<Subject> get _teacherSubjects {
-    final teacher = _selectedTeacher;
-    final assigned = teacher?.subjectIds.toSet() ?? <int>{};
     final selectedClass = firstOrNull(
       widget.data.classes.where((item) => item.id == _classId && item.isActive),
     );
@@ -1492,7 +1684,6 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
         .where(
           (item) =>
               item.isActive &&
-              assigned.contains(item.id) &&
               (classSubjects.isEmpty || classSubjects.contains(item.id)),
         )
         .toList();
@@ -1529,7 +1720,6 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
     return teacher == null ||
         subject == null ||
         !subject.isActive ||
-        !teacher.subjectIds.contains(_subjectId) ||
         (schoolClass != null &&
             schoolClass.subjectIds.isNotEmpty &&
             !schoolClass.subjectIds.contains(_subjectId));
@@ -1556,22 +1746,27 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
     if (_classId == null ||
         _teacherId == null ||
         _subjectId == null ||
-        _periodId == null) {
+        _periodId == null ||
+        _days.isEmpty) {
       setState(() => _error = 'Choose a class, teacher, subject, and period.');
       return;
     }
     Navigator.pop(
       context,
-      TimetableEntry(
-        id: widget.entry?.id,
-        classId: _classId!,
-        sectionId: _sectionId == 0 ? null : _sectionId,
-        subjectId: _subjectId!,
-        teacherId: _teacherId!,
-        periodId: _periodId!,
-        dayOfWeek: _day,
-        room: _room.text.trim(),
-      ),
+      _days
+          .map(
+            (day) => TimetableEntry(
+              id: widget.entry?.dayOfWeek == day ? widget.entry?.id : null,
+              classId: _classId!,
+              sectionId: _sectionId == 0 ? null : _sectionId,
+              subjectId: _subjectId!,
+              teacherId: _teacherId!,
+              periodId: _periodId!,
+              dayOfWeek: day,
+              room: _room.text.trim(),
+            ),
+          )
+          .toList(growable: false),
     );
   }
 
@@ -1580,10 +1775,17 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
     final classes = widget.data.classes
         .where((item) => item.isActive || item.id == widget.entry?.classId)
         .toList();
-    final teachers = widget.data.teachers
-        .where((item) => item.isActive)
-        .toList();
     final subjects = _teacherSubjects;
+    final teachers =
+        widget.data.teachers.where((item) => item.isActive).toList()
+          ..sort((a, b) {
+            final aQualified =
+                _subjectId != null && a.subjectIds.contains(_subjectId);
+            final bQualified =
+                _subjectId != null && b.subjectIds.contains(_subjectId);
+            if (aQualified != bQualified) return aQualified ? -1 : 1;
+            return a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase());
+          });
     final periods = widget.data.periods.where((item) => item.isActive).toList();
     return AlertDialog(
       title: Text(
@@ -1597,52 +1799,14 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                DropdownButtonFormField<int>(
-                  initialValue: _classId,
-                  decoration: const InputDecoration(labelText: 'Class'),
-                  items: classes
-                      .map(
-                        (item) => DropdownMenuItem(
-                          value: item.id,
-                          child: Text(
-                            item.isActive
-                                ? item.name
-                                : '${item.name} (disabled · historical)',
-                          ),
-                        ),
-                      )
-                      .toList(),
-                  validator: (value) => value == null ? 'Choose a class' : null,
-                  onChanged: (value) => setState(() {
-                    _classId = value;
-                    _sectionId = 0;
-                    _sections = _loadSections();
-                    if (!_teacherSubjects.any(
-                      (item) => item.id == _subjectId,
-                    )) {
-                      _subjectId = _firstSubject;
-                    }
-                  }),
-                ),
-                const SizedBox(height: 12),
-                FutureBuilder<List<SchoolSection>>(
-                  future: _sections,
-                  builder: (context, snapshot) {
-                    final sections = snapshot.data ?? const <SchoolSection>[];
-                    return DropdownButtonFormField<int>(
-                      initialValue: _sectionId,
-                      decoration: const InputDecoration(labelText: 'Section'),
-                      items: [
-                        const DropdownMenuItem(
-                          value: 0,
-                          child: Text('Whole class'),
-                        ),
-                        ...sections
-                            .where(
-                              (item) =>
-                                  item.isActive ||
-                                  item.id == widget.entry?.sectionId,
-                            )
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<int>(
+                        initialValue: _classId,
+                        decoration: const InputDecoration(labelText: 'Class'),
+                        items: classes
                             .map(
                               (item) => DropdownMenuItem(
                                 value: item.id,
@@ -1652,63 +1816,133 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                                       : '${item.name} (disabled · historical)',
                                 ),
                               ),
+                            )
+                            .toList(),
+                        validator: (value) =>
+                            value == null ? 'Choose a class' : null,
+                        onChanged: (value) => setState(() {
+                          _classId = value;
+                          _sectionId = 0;
+                          _sections = _loadSections();
+                          if (!_teacherSubjects.any(
+                            (item) => item.id == _subjectId,
+                          )) {
+                            _subjectId = _firstSubject;
+                          }
+                        }),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: FutureBuilder<List<SchoolSection>>(
+                        future: _sections,
+                        builder: (context, snapshot) {
+                          final sections =
+                              snapshot.data ?? const <SchoolSection>[];
+                          return DropdownButtonFormField<int>(
+                            initialValue: _sectionId,
+                            decoration: const InputDecoration(
+                              labelText: 'Section',
                             ),
-                      ],
-                      onChanged: (value) =>
-                          setState(() => _sectionId = value ?? 0),
-                    );
-                  },
+                            items: [
+                              const DropdownMenuItem(
+                                value: 0,
+                                child: Text('Whole class'),
+                              ),
+                              ...sections
+                                  .where(
+                                    (item) =>
+                                        item.isActive ||
+                                        item.id == widget.entry?.sectionId,
+                                  )
+                                  .map(
+                                    (item) => DropdownMenuItem(
+                                      value: item.id,
+                                      child: Text(
+                                        item.isActive
+                                            ? item.name
+                                            : '${item.name} (disabled · historical)',
+                                      ),
+                                    ),
+                                  ),
+                            ],
+                            onChanged: (value) =>
+                                setState(() => _sectionId = value ?? 0),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<int>(
-                  initialValue: _teacherId,
-                  decoration: const InputDecoration(labelText: 'Teacher'),
-                  items: teachers
+                DropdownMenu<Teacher>(
+                  key: ValueKey('teacher-$_teacherId'),
+                  initialSelection: _selectedTeacher,
+                  label: const Text('Teacher'),
+                  expandedInsets: EdgeInsets.zero,
+                  enableFilter: true,
+                  requestFocusOnTap: true,
+                  dropdownMenuEntries: teachers
                       .map(
-                        (item) => DropdownMenuItem(
-                          value: item.id,
-                          child: Text(item.fullName),
+                        (item) => DropdownMenuEntry<Teacher>(
+                          value: item,
+                          label: item.fullName,
+                          trailingIcon: item.subjectIds.contains(_subjectId)
+                              ? const Icon(Icons.check_circle_outline_rounded)
+                              : const Icon(Icons.info_outline_rounded),
+                          labelWidget: Row(
+                            children: [
+                              Expanded(child: Text(item.fullName)),
+                              const SizedBox(width: 8),
+                              Text(
+                                item.subjectIds.contains(_subjectId)
+                                    ? 'Subject match'
+                                    : 'Fallback',
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
+                            ],
+                          ),
                         ),
                       )
                       .toList(),
-                  validator: (value) =>
-                      value == null ? 'Choose a teacher' : null,
-                  onChanged: (value) => setState(() {
-                    _teacherId = value;
-                    if (!_teacherSubjects.any(
-                      (item) => item.id == _subjectId,
-                    )) {
-                      _subjectId = _firstSubject;
-                    }
+                  onSelected: (teacher) => setState(() {
+                    _teacherId = teacher?.id;
                   }),
                 ),
+                if (_selectedTeacher != null &&
+                    _subjectId != null &&
+                    !_selectedTeacher!.subjectIds.contains(_subjectId)) ...[
+                  const SizedBox(height: 6),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Subject fallback: this teacher is not listed for the selected subject. Choose a subject-qualified teacher when available.',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 12),
                 if (subjects.isEmpty)
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        _selectedTeacher?.subjectIds.isEmpty ?? true
-                            ? 'No subjects assigned to this teacher. Please assign subjects in Teacher Management first.'
-                            : 'No assigned subjects are enabled for this class.',
+                      const Text(
+                        'No active subjects are available for this class. Enable subjects in School setup.',
                       ),
                       TextButton.icon(
                         onPressed: () {
                           final navigator = Navigator.of(context);
-                          final tab =
-                              (_selectedTeacher?.subjectIds.isEmpty ?? true)
-                              ? 1
-                              : 2;
                           navigator.pop();
                           navigator.push(
                             MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  SchoolManagementScreen(initialTabIndex: tab),
+                              builder: (_) => const SchoolManagementScreen(
+                                initialTabIndex: 2,
+                              ),
                             ),
                           );
                         },
                         icon: const Icon(Icons.manage_accounts_outlined),
-                        label: const Text('Manage teacher subjects'),
+                        label: const Text('Manage class subjects'),
                       ),
                     ],
                   )
@@ -1721,9 +1955,7 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                             subjects.any((item) => item.id == _subjectId)
                             ? _subjectId
                             : _firstSubject,
-                        decoration: const InputDecoration(
-                          labelText: 'Subject taught by this teacher',
-                        ),
+                        decoration: const InputDecoration(labelText: 'Subject'),
                         items: subjects
                             .map(
                               (item) => DropdownMenuItem(
@@ -1737,17 +1969,18 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                               ),
                             )
                             .toList(),
-                        validator: (value) => value == null
-                            ? 'Choose one of this teacher’s subjects'
-                            : null,
+                        validator: (value) =>
+                            value == null ? 'Choose a class subject' : null,
                         onChanged: (value) =>
                             setState(() => _subjectId = value),
                       ),
-                      if (_selectedTeacher?.subjectIds.isEmpty ?? true)
+                      if (_selectedTeacher != null &&
+                          _subjectId != null &&
+                          !_selectedTeacher!.subjectIds.contains(_subjectId))
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
                           child: Text(
-                            'No subjects are assigned to this teacher. Select an eligible teacher subject before saving.',
+                            'Subject fallback: this teacher is not listed for the selected subject. Choose a subject-qualified teacher when available.',
                           ),
                         )
                       else if (_selectedSubjectNeedsCorrection)
@@ -1760,20 +1993,32 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                     ],
                   ),
                 const SizedBox(height: 12),
-                DropdownButtonFormField<int>(
-                  initialValue: _day,
-                  decoration: const InputDecoration(labelText: 'Working day'),
-                  items: widget.data.workingDays
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    'Days · same lesson will be applied to each selected day',
+                    style: Theme.of(context).textTheme.labelLarge,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: widget.data.workingDays
                       .map(
-                        (day) => DropdownMenuItem(
-                          value: day,
-                          child: Text(schoolWeekdays[day]!),
+                        (day) => FilterChip(
+                          label: Text(schoolWeekdays[day]!),
+                          selected: _days.contains(day),
+                          onSelected: (selected) => setState(() {
+                            if (selected) {
+                              _days.add(day);
+                            } else if (_days.length > 1) {
+                              _days.remove(day);
+                            }
+                          }),
                         ),
                       )
                       .toList(),
-                  validator: (value) =>
-                      value == null ? 'Choose a working day' : null,
-                  onChanged: (value) => setState(() => _day = value ?? 1),
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<int>(
@@ -1947,6 +2192,17 @@ T? _findById<T>(List<T> values, int id) {
   }
   return null;
 }
+
+TimetableEntry _withTimetableId(TimetableEntry entry, int id) => TimetableEntry(
+  id: id,
+  classId: entry.classId,
+  sectionId: entry.sectionId,
+  subjectId: entry.subjectId,
+  teacherId: entry.teacherId,
+  periodId: entry.periodId,
+  dayOfWeek: entry.dayOfWeek,
+  room: entry.room,
+);
 
 String _friendlyError(Object error) {
   if (error is SchoolDataException || error is DuplicateSchoolRecordException) {

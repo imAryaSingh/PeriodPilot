@@ -91,6 +91,35 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
     }
   }
 
+  Future<void> _markAbsent(_AbsenceData data) async {
+    final records = await showDialog<List<TeacherAbsence>>(
+      context: context,
+      builder: (_) => _BulkAbsenceDialog(
+        teachers: data.teachers,
+        initialDate: _selectedDate,
+        existingAbsences: data.absences,
+      ),
+    );
+    if (records == null || records.isEmpty || !mounted) return;
+    try {
+      await context.read<SchoolDatabase>().saveAbsences(records);
+      if (!mounted) return;
+      setState(() {
+        _selectedDate = _dateOnly(records.first.date);
+        _data = _load();
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Marked ${records.length} ${records.length == 1 ? 'teacher' : 'teachers'} absent.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) _showError(context, _friendlyError(error));
+    }
+  }
+
   Future<void> _delete(TeacherAbsence absence) async {
     final data = await _data;
     if (!mounted) return;
@@ -142,10 +171,15 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
 
   Widget _buildContent(_AbsenceData data) {
     final dateKey = schoolDateKey(_selectedDate);
-    final daily = data.absences
+    final matching = data.absences
         .where((absence) => absence.dateKey == dateKey)
         .toList();
-    final affectedCount = daily.fold<int>(
+    final daily = <int, TeacherAbsence>{};
+    for (final absence in matching) {
+      daily.putIfAbsent(absence.teacherId, () => absence);
+    }
+    final dailyRecords = daily.values.toList(growable: false);
+    final affectedCount = dailyRecords.fold<int>(
       0,
       (total, absence) => total + _affectedLessons(data, absence).length,
     );
@@ -197,7 +231,7 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
                 ),
                 FilledButton.icon(
                   onPressed: data.teachers.any((teacher) => teacher.isActive)
-                      ? () => _edit()
+                      ? () => _markAbsent(data)
                       : null,
                   icon: const Icon(Icons.person_add_alt_1_rounded),
                   label: const Text('Mark absent'),
@@ -221,7 +255,10 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
         ),
         const SizedBox(height: 18),
         _SummaryRow(
-          teachersAbsent: daily.length,
+          teachersAbsent: countAbsentTeachersForDate(
+            data.absences,
+            _selectedDate,
+          ),
           affectedLessons: affectedCount,
         ),
         const SizedBox(height: 14),
@@ -232,7 +269,7 @@ class _AbsenceManagementScreenState extends State<AbsenceManagementScreen> {
             message: 'Teachers marked absent for this date will appear here.',
           )
         else
-          ...daily.map((absence) => _absenceCard(data, absence)),
+          ...matching.map((absence) => _absenceCard(data, absence)),
       ],
     );
   }
@@ -350,6 +387,163 @@ class _AbsenceData {
   final List<SchoolClass> classes;
   final List<Subject> subjects;
   final Map<int, String> sectionNames;
+}
+
+class _BulkAbsenceDialog extends StatefulWidget {
+  const _BulkAbsenceDialog({
+    required this.teachers,
+    required this.initialDate,
+    required this.existingAbsences,
+  });
+
+  final List<Teacher> teachers;
+  final DateTime initialDate;
+  final List<TeacherAbsence> existingAbsences;
+
+  @override
+  State<_BulkAbsenceDialog> createState() => _BulkAbsenceDialogState();
+}
+
+class _BulkAbsenceDialogState extends State<_BulkAbsenceDialog> {
+  late DateTime _date = _dateOnly(widget.initialDate);
+  final Set<int> _selectedTeacherIds = {};
+  AbsenceType _type = AbsenceType.absent;
+  final _notes = TextEditingController();
+
+  @override
+  void dispose() {
+    _notes.dispose();
+    super.dispose();
+  }
+
+  Future<void> _chooseDate() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _date,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+    );
+    if (date != null && mounted) setState(() => _date = _dateOnly(date));
+  }
+
+  void _submit() {
+    if (_selectedTeacherIds.isEmpty) return;
+    Navigator.pop(
+      context,
+      _selectedTeacherIds
+          .map(
+            (teacherId) => TeacherAbsence(
+              id: null,
+              teacherId: teacherId,
+              date: _date,
+              type: _type,
+              notes: _notes.text.trim(),
+            ),
+          )
+          .toList(growable: false),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final teachers = widget.teachers
+        .where((teacher) => teacher.isActive)
+        .toList();
+    final alreadyMarkedTeacherIds = widget.existingAbsences
+        .where((absence) => absence.dateKey == schoolDateKey(_date))
+        .map((absence) => absence.teacherId)
+        .toSet();
+    final available = teachers
+        .where((teacher) => !alreadyMarkedTeacherIds.contains(teacher.id))
+        .toList();
+    return AlertDialog(
+      title: const Text('Mark teachers absent'),
+      content: SizedBox(
+        width: 460,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: _chooseDate,
+                icon: const Icon(Icons.calendar_month_rounded),
+                label: Text(_displayDate(_date)),
+              ),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<AbsenceType>(
+              initialValue: _type,
+              decoration: const InputDecoration(labelText: 'Record type'),
+              items: AbsenceType.values
+                  .map(
+                    (type) =>
+                        DropdownMenuItem(value: type, child: Text(type.label)),
+                  )
+                  .toList(),
+              onChanged: (value) => setState(() {
+                if (value != null) _type = value;
+              }),
+            ),
+            const SizedBox(height: 8),
+            Flexible(
+              child: available.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'All active teachers are already recorded for this date.',
+                      ),
+                    )
+                  : ListView.builder(
+                      shrinkWrap: true,
+                      itemCount: teachers.length,
+                      itemBuilder: (context, index) {
+                        final teacher = teachers[index];
+                        final alreadyMarked = alreadyMarkedTeacherIds.contains(
+                          teacher.id,
+                        );
+                        return CheckboxListTile(
+                          value:
+                              alreadyMarked ||
+                              _selectedTeacherIds.contains(teacher.id),
+                          onChanged: alreadyMarked
+                              ? null
+                              : (selected) => setState(() {
+                                  if (selected == true) {
+                                    _selectedTeacherIds.add(teacher.id!);
+                                  } else {
+                                    _selectedTeacherIds.remove(teacher.id!);
+                                  }
+                                }),
+                          title: Text(teacher.fullName),
+                          subtitle: alreadyMarked
+                              ? const Text('Already recorded')
+                              : null,
+                          controlAffinity: ListTileControlAffinity.leading,
+                          dense: true,
+                        );
+                      },
+                    ),
+            ),
+            TextField(
+              controller: _notes,
+              maxLines: 2,
+              decoration: const InputDecoration(labelText: 'Note (optional)'),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: _selectedTeacherIds.isEmpty ? null : _submit,
+          child: Text('Save ${_selectedTeacherIds.length}'),
+        ),
+      ],
+    );
+  }
 }
 
 class _AbsenceDialog extends StatefulWidget {

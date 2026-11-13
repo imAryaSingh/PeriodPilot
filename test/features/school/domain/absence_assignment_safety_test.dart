@@ -29,6 +29,21 @@ SubstitutionAssignment assignment({
 );
 
 void main() {
+  group('countAbsentTeachersForDate', () {
+    test('counts distinct teachers only for the selected calendar date', () {
+      expect(
+        countAbsentTeachersForDate([
+          absence(teacherId: 4, date: DateTime(2026, 11, 9, 8)),
+          absence(teacherId: 4, date: DateTime(2026, 11, 9, 16)),
+          absence(teacherId: 5, date: DateTime(2026, 11, 9)),
+          absence(teacherId: 6, date: DateTime(2026, 11, 8)),
+          absence(teacherId: 7, date: DateTime(2026, 11, 10)),
+        ], DateTime(2026, 11, 9)),
+        2,
+      );
+    });
+  });
+
   group('validateAbsenceChangeAgainstAssignments', () {
     test('blocks moving or removing an absence with active assignments', () {
       final old = absence();

@@ -41,7 +41,7 @@ class RoleHomeScreen extends StatelessWidget {
   }
 }
 
-void _open(BuildContext context, Widget page) =>
+Future<void> _open(BuildContext context, Widget page) =>
     Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => page));
 
 class _Dashboard extends StatefulWidget {
@@ -55,21 +55,18 @@ class _DashboardState extends State<_Dashboard> {
   late Future<_DashboardData> _future = _load();
   Future<_DashboardData> _load() async {
     final db = context.read<SchoolDatabase>();
+    final date = DateTime.now();
     final all = await Future.wait<Object>([
       db.getTeachers(),
-      db.getAbsences(),
+      db.getAbsencesForDate(date),
       db.getSubstitutions(),
       db.getTimetableEntries(),
       db.getPeriods(),
       db.getClasses(),
       db.getSubjects(),
     ]);
-    final date = DateTime.now();
-    final today = schoolDateKey(date);
     final teachers = all[0] as List<Teacher>;
-    final absences = (all[1] as List<TeacherAbsence>)
-        .where((x) => x.dateKey == today)
-        .toList();
+    final absences = all[1] as List<TeacherAbsence>;
     final assignments = all[2] as List<SubstitutionAssignment>;
     final entries = all[3] as List<TimetableEntry>;
     final periods = all[4] as List<SchoolPeriod>;
@@ -98,6 +95,11 @@ class _DashboardState extends State<_Dashboard> {
   }
 
   void _refresh() => setState(() => _future = _load());
+
+  Future<void> _openAbsenceManagement() async {
+    await _open(context, const AbsenceManagementScreen());
+    if (mounted) _refresh();
+  }
 
   @override
   Widget build(BuildContext context) => FutureBuilder<_DashboardData>(
@@ -187,8 +189,7 @@ class _DashboardState extends State<_Dashboard> {
                     ),
                     if (widget.profile.role == UserRole.administrator)
                       FilledButton.tonalIcon(
-                        onPressed: () =>
-                            _open(context, const AbsenceManagementScreen()),
+                        onPressed: _openAbsenceManagement,
                         icon: const Icon(Icons.person_off_rounded, size: 18),
                         label: const Text('Mark absent'),
                         style: FilledButton.styleFrom(
@@ -251,15 +252,9 @@ class _DashboardState extends State<_Dashboard> {
       ),
       _Metric(
         'Absent today',
-        '${d.absences.length}',
+        '${countAbsentTeachersForDate(d.absences, DateTime.now())}',
         Icons.event_busy_rounded,
         const Color(0xFFF0A078),
-      ),
-      _Metric(
-        'Available today',
-        '${d.teachers.where((t) => t.isActive && !d.absences.any((a) => a.teacherId == t.id)).length}',
-        Icons.person_outline_rounded,
-        const Color(0xFF75D9B8),
       ),
       _Metric(
         'Duties today',
@@ -285,9 +280,9 @@ class _DashboardState extends State<_Dashboard> {
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
-            final columns = ((constraints.maxWidth + 12) / 168).floor().clamp(
+            final columns = ((constraints.maxWidth + 12) / 220).floor().clamp(
               1,
-              5,
+              4,
             );
             return GridView.builder(
               shrinkWrap: true,
