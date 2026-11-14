@@ -138,6 +138,11 @@ void validateTimetableEntryEligibility({
   if (subject == null || !subject.isActive) {
     throw const SchoolDataException('Choose an enabled subject.');
   }
+  if (!teacher.subjectIds.contains(entry.subjectId)) {
+    throw const SchoolDataException(
+      'This teacher is not assigned to the selected subject. Update the teacher\'s subjects before using this timetable entry.',
+    );
+  }
   if (schoolClass.subjectIds.isNotEmpty &&
       !schoolClass.subjectIds.contains(entry.subjectId)) {
     throw const SchoolDataException(

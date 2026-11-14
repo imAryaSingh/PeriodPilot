@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../data/school_database.dart';
 import '../domain/school_models.dart';
@@ -990,6 +991,23 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     _selectedDays = {_firstDay};
     _activeDay = _firstDay;
     _sections = _loadSections();
+    _restoreView();
+  }
+
+  Future<void> _restoreView() async {
+    final preferences = await SharedPreferences.getInstance();
+    final savedView = preferences.getInt('periodpilot_timetable_view');
+    if (mounted &&
+        savedView != null &&
+        savedView < _TimetableView.values.length) {
+      setState(() => _view = _TimetableView.values[savedView]);
+    }
+  }
+
+  Future<void> _selectView(_TimetableView view) async {
+    setState(() => _view = view);
+    final preferences = await SharedPreferences.getInstance();
+    await preferences.setInt('periodpilot_timetable_view', view.index);
   }
 
   int? get _firstActiveClass {
@@ -1206,22 +1224,22 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     final activeTeachers = data.teachers
         .where((teacher) => teacher.isActive)
         .toList();
-    final chosenTeacher =
-        data.teachers.any((teacher) => teacher.id == _teacherId)
-        ? data.teachers.firstWhere((teacher) => teacher.id == _teacherId)
-        : null;
-    final hasLessonOptions =
-        chosenTeacher != null &&
-        data.classes
-            .where((item) => item.isActive)
-            .any(
-              (schoolClass) => data.subjects.any(
-                (subject) =>
-                    subject.isActive &&
-                    (schoolClass.subjectIds.isEmpty ||
-                        schoolClass.subjectIds.contains(subject.id)),
-              ),
-            );
+    final hasLessonOptions = data.classes
+        .where((item) => item.isActive)
+        .any(
+          (schoolClass) => activeTeachers.any(
+            (teacher) =>
+                (_view != _TimetableView.teacherView ||
+                    teacher.id == _teacherId) &&
+                data.subjects.any(
+                  (subject) =>
+                      subject.isActive &&
+                      teacher.subjectIds.contains(subject.id) &&
+                      (schoolClass.subjectIds.isEmpty ||
+                          schoolClass.subjectIds.contains(subject.id)),
+                ),
+          ),
+        );
     final entries =
         data.entries.where((entry) {
             if (!_selectedDays.contains(entry.dayOfWeek)) return false;
@@ -1238,27 +1256,9 @@ class _TimetablesTabState extends State<_TimetablesTab> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(20, 18, 20, 8),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
           child: Column(
             children: [
-              _PageIntro(
-                title: 'Weekly timetable',
-                subtitle: 'Assign a teacher and subject to each class period.',
-                action: FilledButton.icon(
-                  onPressed:
-                      activePeriods.isEmpty ||
-                          !data.classes.any((item) => item.isActive) ||
-                          activeTeachers.isEmpty ||
-                          data.subjects
-                              .where((subject) => subject.isActive)
-                              .isEmpty
-                      ? null
-                      : () => _openEditor(),
-                  icon: const Icon(Icons.add_rounded),
-                  label: const Text('Add lesson'),
-                ),
-              ),
-              const SizedBox(height: 16),
               SegmentedButton<_TimetableView>(
                 segments: const [
                   ButtonSegment(
@@ -1273,8 +1273,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                   ),
                 ],
                 selected: {_view},
-                onSelectionChanged: (selection) =>
-                    setState(() => _view = selection.first),
+                onSelectionChanged: (selection) => _selectView(selection.first),
               ),
               const SizedBox(height: 12),
               if (_view == _TimetableView.classView)
@@ -1395,7 +1394,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
                                         ? _view == _TimetableView.teacherView
                                               ? 'Tap to add a lesson for this teacher.'
                                               : 'Tap to assign this class period.'
-                                        : 'Add an active class and at least one active class subject before assigning lessons.',
+                                        : 'Add an active teacher, class, and subject assigned to that teacher before assigning lessons.',
                                   ),
                                   onTap: hasLessonOptions
                                       ? () => _openEditor(
@@ -1447,6 +1446,7 @@ class _TimetablesTabState extends State<_TimetablesTab> {
         !teacher.isActive ||
         subject == null ||
         !subject.isActive ||
+        !teacher.subjectIds.contains(entry.subjectId) ||
         schoolClass == null ||
         !schoolClass.isActive ||
         (schoolClass.subjectIds.isNotEmpty &&
@@ -1459,8 +1459,6 @@ class _TimetablesTabState extends State<_TimetablesTab> {
         '${schoolClass?.name ?? 'Class'}${section == null ? '' : ' · $section'}',
       if (_view == _TimetableView.classView)
         teacher?.fullName ?? 'Teacher unavailable',
-      if (teacher != null && !teacher.subjectIds.contains(entry.subjectId))
-        'Subject fallback',
       if (_view == _TimetableView.classView && section != null) section,
       if (entry.room.isNotEmpty) 'Room ${entry.room}',
     ];
@@ -1676,14 +1674,20 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
   }
 
   List<Subject> get _teacherSubjects {
+    final selectedTeacher = _selectedTeacher;
+    if (selectedTeacher == null || !selectedTeacher.isActive) {
+      return <Subject>[];
+    }
     final selectedClass = firstOrNull(
       widget.data.classes.where((item) => item.id == _classId && item.isActive),
     );
-    final classSubjects = selectedClass?.subjectIds.toSet() ?? <int>{};
+    if (selectedClass == null) return <Subject>[];
+    final classSubjects = selectedClass.subjectIds.toSet();
     final subjects = widget.data.subjects
         .where(
           (item) =>
               item.isActive &&
+              selectedTeacher.subjectIds.contains(item.id) &&
               (classSubjects.isEmpty || classSubjects.contains(item.id)),
         )
         .toList();
@@ -1709,6 +1713,20 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
   int? get _firstSubject =>
       _teacherSubjects.isEmpty ? null : _teacherSubjects.first.id;
 
+  bool _subjectIsAllowed(Subject subject) {
+    final teacher = _selectedTeacher;
+    final schoolClass = firstOrNull(
+      widget.data.classes.where((item) => item.id == _classId && item.isActive),
+    );
+    return teacher != null &&
+        teacher.isActive &&
+        schoolClass != null &&
+        subject.isActive &&
+        teacher.subjectIds.contains(subject.id) &&
+        (schoolClass.subjectIds.isEmpty ||
+            schoolClass.subjectIds.contains(subject.id));
+  }
+
   bool get _selectedSubjectNeedsCorrection {
     final teacher = _selectedTeacher;
     final subject = firstOrNull(
@@ -1718,10 +1736,13 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
       widget.data.classes.where((item) => item.id == _classId),
     );
     return teacher == null ||
+        !teacher.isActive ||
         subject == null ||
         !subject.isActive ||
-        (schoolClass != null &&
-            schoolClass.subjectIds.isNotEmpty &&
+        !teacher.subjectIds.contains(subject.id) ||
+        schoolClass == null ||
+        !schoolClass.isActive ||
+        (schoolClass.subjectIds.isNotEmpty &&
             !schoolClass.subjectIds.contains(_subjectId));
   }
 
@@ -1897,7 +1918,7 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                               Text(
                                 item.subjectIds.contains(_subjectId)
                                     ? 'Subject match'
-                                    : 'Fallback',
+                                    : 'Not assigned',
                                 style: Theme.of(context).textTheme.labelSmall,
                               ),
                             ],
@@ -1907,27 +1928,45 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                       .toList(),
                   onSelected: (teacher) => setState(() {
                     _teacherId = teacher?.id;
+                    if (!_teacherSubjects.any(
+                      (item) => item.id == _subjectId,
+                    )) {
+                      _subjectId = _firstSubject;
+                    }
                   }),
                 ),
-                if (_selectedTeacher != null &&
-                    _subjectId != null &&
-                    !_selectedTeacher!.subjectIds.contains(_subjectId)) ...[
-                  const SizedBox(height: 6),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      'Subject fallback: this teacher is not listed for the selected subject. Choose a subject-qualified teacher when available.',
-                      style: Theme.of(context).textTheme.bodySmall,
+                if (_selectedTeacher != null && subjects.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        'This teacher has no active subjects enabled for this class. Assign subjects in the teacher profile or class setup.',
+                      ),
                     ),
                   ),
-                ],
                 const SizedBox(height: 12),
                 if (subjects.isEmpty)
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Text(
-                        'No active subjects are available for this class. Enable subjects in School setup.',
+                        'No active subject is assigned to both this teacher and class. Update the teacher subject list or the class subject list in School setup.',
+                      ),
+                      TextButton.icon(
+                        onPressed: () {
+                          final navigator = Navigator.of(context);
+                          navigator.pop();
+                          navigator.push(
+                            MaterialPageRoute<void>(
+                              builder: (_) => const SchoolManagementScreen(
+                                initialTabIndex: 1,
+                              ),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.manage_accounts_outlined),
+                        label: const Text('Manage teacher subjects'),
                       ),
                       TextButton.icon(
                         onPressed: () {
@@ -1941,7 +1980,7 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                             ),
                           );
                         },
-                        icon: const Icon(Icons.manage_accounts_outlined),
+                        icon: const Icon(Icons.class_outlined),
                         label: const Text('Manage class subjects'),
                       ),
                     ],
@@ -1960,6 +1999,7 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                             .map(
                               (item) => DropdownMenuItem(
                                 value: item.id,
+                                enabled: _subjectIsAllowed(item),
                                 child: Text(
                                   item.id == widget.entry?.subjectId &&
                                           _selectedSubjectNeedsCorrection
@@ -1975,15 +2015,11 @@ class _TimetableEntryDialogState extends State<_TimetableEntryDialog> {
                             setState(() => _subjectId = value),
                       ),
                       if (_selectedTeacher != null &&
-                          _subjectId != null &&
-                          !_selectedTeacher!.subjectIds.contains(_subjectId))
-                        const Padding(
-                          padding: EdgeInsets.only(top: 6),
-                          child: Text(
-                            'Subject fallback: this teacher is not listed for the selected subject. Choose a subject-qualified teacher when available.',
-                          ),
-                        )
-                      else if (_selectedSubjectNeedsCorrection)
+                              _subjectId != null &&
+                              !_selectedTeacher!.subjectIds.contains(
+                                _subjectId,
+                              ) ||
+                          _selectedSubjectNeedsCorrection)
                         const Padding(
                           padding: EdgeInsets.only(top: 6),
                           child: Text(

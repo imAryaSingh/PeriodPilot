@@ -280,10 +280,9 @@ class _DashboardState extends State<_Dashboard> {
         const SizedBox(height: 12),
         LayoutBuilder(
           builder: (context, constraints) {
-            final columns = ((constraints.maxWidth + 12) / 220).floor().clamp(
-              1,
-              4,
-            );
+            final columns = constraints.maxWidth < 600
+                ? 2
+                : ((constraints.maxWidth + 12) / 220).floor().clamp(2, 4);
             return GridView.builder(
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
@@ -303,35 +302,54 @@ class _DashboardState extends State<_Dashboard> {
         _sectionTitle(context, 'Quick actions', 'Common administrator tasks'),
         const SizedBox(height: 12),
         if (widget.profile.role == UserRole.administrator)
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              _action(
-                context,
-                'Assign substitute',
-                Icons.swap_horiz_rounded,
-                () => _open(context, const SubstituteManagementScreen()),
-              ),
-              _action(
-                context,
-                'Manage timetable',
-                Icons.calendar_month_rounded,
-                () => _open(context, const TimetableManagementScreen()),
-              ),
-              _action(
-                context,
-                'Manage teachers',
-                Icons.manage_accounts_rounded,
-                () => _open(context, const SchoolManagementScreen()),
-              ),
-              _action(
-                context,
-                'Reports',
-                Icons.summarize_rounded,
-                () => _open(context, const ReportsScreen()),
-              ),
-            ],
+          LayoutBuilder(
+            builder: (context, constraints) {
+              final columns = constraints.maxWidth < 600 ? 2 : 4;
+              final width =
+                  (constraints.maxWidth - (columns - 1) * 10) / columns;
+              return Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: [
+                  SizedBox(
+                    width: width,
+                    child: _action(
+                      context,
+                      'Assign substitute',
+                      Icons.swap_horiz_rounded,
+                      () => _open(context, const SubstituteManagementScreen()),
+                    ),
+                  ),
+                  SizedBox(
+                    width: width,
+                    child: _action(
+                      context,
+                      'Manage timetable',
+                      Icons.calendar_month_rounded,
+                      () => _open(context, const TimetableManagementScreen()),
+                    ),
+                  ),
+                  SizedBox(
+                    width: width,
+                    child: _action(
+                      context,
+                      'Manage teachers',
+                      Icons.manage_accounts_rounded,
+                      () => _open(context, const SchoolManagementScreen()),
+                    ),
+                  ),
+                  SizedBox(
+                    width: width,
+                    child: _action(
+                      context,
+                      'Reports',
+                      Icons.summarize_rounded,
+                      () => _open(context, const ReportsScreen()),
+                    ),
+                  ),
+                ],
+              );
+            },
           ),
         if (widget.profile.role == UserRole.principal) ...[
           const SizedBox(height: 6),

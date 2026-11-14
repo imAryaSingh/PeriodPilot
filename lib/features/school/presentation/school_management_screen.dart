@@ -641,39 +641,23 @@ class _ClassesTabState extends State<_ClassesTab> {
       'UKG',
       ...List.generate(12, (i) => 'Class ${i + 1}'),
     ];
-    var classes = await database.getClasses();
-    final known = {
-      for (final item in classes) item.name.trim().toLowerCase(): item,
-    };
+    final initialClasses = await database.getClasses();
+    final knownNames = initialClasses
+        .map((item) => item.name.trim().toLowerCase())
+        .toSet();
     for (var index = 0; index < names.length; index++) {
-      var schoolClass = known[names[index].toLowerCase()];
-      if (schoolClass == null) {
+      if (!knownNames.contains(names[index].toLowerCase())) {
         await database.saveClass(
           SchoolClass(id: 0, name: names[index], sortOrder: index),
         );
-        classes = await database.getClasses();
-        schoolClass = classes.firstWhere(
-          (item) => item.name.toLowerCase() == names[index].toLowerCase(),
-        );
-        known[names[index].toLowerCase()] = schoolClass;
-      } else if (schoolClass.sortOrder != index) {
-        await database.saveClass(
-          SchoolClass(
-            id: schoolClass.id,
-            name: schoolClass.name,
-            isActive: schoolClass.isActive,
-            sortOrder: index,
-            subjectIds: schoolClass.subjectIds,
-          ),
-        );
-        schoolClass = SchoolClass(
-          id: schoolClass.id,
-          name: schoolClass.name,
-          isActive: schoolClass.isActive,
-          sortOrder: index,
-          subjectIds: schoolClass.subjectIds,
-        );
       }
+    }
+
+    final classes = await database.getClasses();
+    final predefinedNames = names.map((name) => name.toLowerCase()).toSet();
+    for (final schoolClass in classes.where(
+      (item) => predefinedNames.contains(item.name.trim().toLowerCase()),
+    )) {
       final sections = await database.getSections(schoolClass.id);
       for (final sectionName in const ['A', 'B', 'C']) {
         if (!sections.any(
@@ -684,22 +668,6 @@ class _ClassesTabState extends State<_ClassesTab> {
           );
         }
       }
-    }
-    final defaultNames = names.map((name) => name.toLowerCase()).toSet();
-    for (final item in classes.where(
-      (item) =>
-          !defaultNames.contains(item.name.toLowerCase()) &&
-          item.sortOrder == 0,
-    )) {
-      await database.saveClass(
-        SchoolClass(
-          id: item.id,
-          name: item.name,
-          isActive: item.isActive,
-          sortOrder: 1000,
-          subjectIds: item.subjectIds,
-        ),
-      );
     }
     if (mounted) _reload();
   }
