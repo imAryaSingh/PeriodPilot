@@ -11,15 +11,18 @@ abstract interface class SchoolDatabase {
   Future<List<Teacher>> getTeachers();
   Future<void> saveTeacher(Teacher teacher);
   Future<void> setTeacherActive(int id, bool isActive);
+  Future<void> deleteTeacher(int id);
   Future<List<SchoolClass>> getClasses();
   Future<List<SchoolSection>> getSections(int classId);
   Future<void> saveClass(SchoolClass schoolClass);
   Future<void> setClassActive(int id, bool isActive);
+  Future<void> deleteClass(int id);
   Future<void> saveSection(SchoolSection section);
   Future<void> setSectionActive(int id, bool isActive);
   Future<List<Subject>> getSubjects();
   Future<void> saveSubject(Subject subject);
   Future<void> setSubjectActive(int id, bool isActive);
+  Future<void> deleteSubject(int id);
   Future<List<SchoolPeriod>> getPeriods();
   Future<void> savePeriod(SchoolPeriod period);
   Future<void> savePeriodConfiguration(List<SchoolPeriod> periods);
@@ -53,6 +56,75 @@ class DuplicateSchoolRecordException implements Exception {
   final String message;
   @override
   String toString() => message;
+}
+
+bool isPredefinedSchoolClassName(String name) {
+  final normalized = name.trim().toLowerCase();
+  return normalized == 'nursery' ||
+      normalized == 'lkg' ||
+      normalized == 'ukg' ||
+      RegExp(r'^class\s+(?:[1-9]|1[0-2])$').hasMatch(normalized);
+}
+
+void validateTeacherCanBeDeleted({
+  required Teacher teacher,
+  required Iterable<TimetableEntry> timetableEntries,
+  required Iterable<TeacherAbsence> absences,
+  required Iterable<SubstitutionAssignment> substitutions,
+}) {
+  if (teacher.email.trim().isNotEmpty || teacher.hasLoginAccount) {
+    throw const SchoolDataException(
+      'This teacher has a sign-in email. Deactivate the teacher instead; deleting the directory record would not delete its Firebase account.',
+    );
+  }
+  if (timetableEntries.any((entry) => entry.teacherId == teacher.id) ||
+      absences.any((absence) => absence.teacherId == teacher.id) ||
+      substitutions.any(
+        (assignment) =>
+            assignment.absentTeacherId == teacher.id ||
+            assignment.substituteTeacherId == teacher.id,
+      )) {
+    throw const SchoolDataException(
+      'This teacher is referenced by timetable, absence, or substitution history. Deactivate the teacher to preserve those records.',
+    );
+  }
+}
+
+void validateClassCanBeDeleted({
+  required SchoolClass schoolClass,
+  required Iterable<TimetableEntry> timetableEntries,
+  required Iterable<SubstitutionAssignment> substitutions,
+}) {
+  if (isPredefinedSchoolClassName(schoolClass.name)) {
+    throw const SchoolDataException(
+      'Predefined grades are kept by school setup. Deactivate this grade instead.',
+    );
+  }
+  if (timetableEntries.any((entry) => entry.classId == schoolClass.id) ||
+      substitutions.any((assignment) => assignment.classId == schoolClass.id)) {
+    throw const SchoolDataException(
+      'This class has timetable or substitution history. Deactivate it to preserve those records.',
+    );
+  }
+}
+
+void validateSubjectCanBeDeleted({
+  required int subjectId,
+  required Iterable<TimetableEntry> timetableEntries,
+  required Iterable<SubstitutionAssignment> substitutions,
+  required Iterable<Teacher> teachers,
+  required Iterable<SchoolClass> classes,
+}) {
+  if (timetableEntries.any((entry) => entry.subjectId == subjectId) ||
+      substitutions.any((assignment) => assignment.subjectId == subjectId) ||
+      teachers.any((teacher) => teacher.subjectIds.contains(subjectId)) ||
+      classes.any(
+        (schoolClass) => schoolClass.subjectIds.contains(subjectId),
+      )) {
+    throw const SchoolDataException(
+      'This subject is assigned to teachers, classes, or timetable history. Deactivate it to preserve those records.',
+    );
+  }
 }
 
 void validateSchoolPeriodConfiguration(List<SchoolPeriod> periods) {

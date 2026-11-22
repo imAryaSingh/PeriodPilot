@@ -63,6 +63,7 @@ class Teacher {
     required this.email,
     required this.phone,
     required this.isActive,
+    this.hasLoginAccount = false,
     this.subjectIds = const <int>[],
   });
 
@@ -72,6 +73,7 @@ class Teacher {
   final String email;
   final String phone;
   final bool isActive;
+  final bool hasLoginAccount;
   final List<int> subjectIds;
 
   factory Teacher.fromMap(Map<String, Object?> row) => Teacher(
@@ -81,6 +83,7 @@ class Teacher {
     email: row['email'] as String? ?? '',
     phone: row['phone'] as String? ?? '',
     isActive: _rowBool(row, 'isActive', 'is_active'),
+    hasLoginAccount: _rowBool(row, 'hasLoginAccount', 'has_login_account'),
     subjectIds: _intList(row['subjectIds'] ?? row['subject_ids']),
   );
 }

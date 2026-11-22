@@ -292,6 +292,44 @@ class LocalSchoolDatabase implements SchoolDatabase {
   }
 
   @override
+  Future<void> deleteTeacher(int id) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final teacherRows = await txn.query(
+        'teachers',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (teacherRows.isEmpty) {
+        throw const SchoolDataException('Teacher not found.');
+      }
+      final entries = await txn.query(
+        'timetable_entries',
+        where: 'teacher_id = ?',
+        whereArgs: [id],
+      );
+      final absences = await txn.query(
+        'attendance_records',
+        where: 'teacher_id = ?',
+        whereArgs: [id],
+      );
+      final substitutions = await txn.query(
+        'substitutions',
+        where: 'absent_teacher_id = ? OR substitute_teacher_id = ?',
+        whereArgs: [id, id],
+      );
+      validateTeacherCanBeDeleted(
+        teacher: Teacher.fromMap(teacherRows.single),
+        timetableEntries: entries.map(TimetableEntry.fromMap),
+        absences: absences.map(TeacherAbsence.fromMap),
+        substitutions: substitutions.map(SubstitutionAssignment.fromMap),
+      );
+      await txn.delete('teachers', where: 'id = ?', whereArgs: [id]);
+    });
+  }
+
+  @override
   Future<List<SchoolClass>> getClasses() async {
     final db = await database;
     final rows = await db.query(
@@ -358,6 +396,38 @@ class LocalSchoolDatabase implements SchoolDatabase {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  @override
+  Future<void> deleteClass(int id) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final classRows = await txn.query(
+        'classes',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (classRows.isEmpty) {
+        throw const SchoolDataException('Class not found.');
+      }
+      final entries = await txn.query(
+        'timetable_entries',
+        where: 'class_id = ?',
+        whereArgs: [id],
+      );
+      final substitutions = await txn.query(
+        'substitutions',
+        where: 'class_id = ?',
+        whereArgs: [id],
+      );
+      validateClassCanBeDeleted(
+        schoolClass: SchoolClass.fromMap(classRows.single),
+        timetableEntries: entries.map(TimetableEntry.fromMap),
+        substitutions: substitutions.map(SubstitutionAssignment.fromMap),
+      );
+      await txn.delete('classes', where: 'id = ?', whereArgs: [id]);
+    });
   }
 
   @override
@@ -444,6 +514,42 @@ class LocalSchoolDatabase implements SchoolDatabase {
       where: 'id = ?',
       whereArgs: [id],
     );
+  }
+
+  @override
+  Future<void> deleteSubject(int id) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      final subjectRows = await txn.query(
+        'subjects',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      if (subjectRows.isEmpty) {
+        throw const SchoolDataException('Subject not found.');
+      }
+      final entries = await txn.query(
+        'timetable_entries',
+        where: 'subject_id = ?',
+        whereArgs: [id],
+      );
+      final substitutions = await txn.query(
+        'substitutions',
+        where: 'subject_id = ?',
+        whereArgs: [id],
+      );
+      final teachers = await txn.query('teachers');
+      final classes = await txn.query('classes');
+      validateSubjectCanBeDeleted(
+        subjectId: id,
+        timetableEntries: entries.map(TimetableEntry.fromMap),
+        substitutions: substitutions.map(SubstitutionAssignment.fromMap),
+        teachers: teachers.map(Teacher.fromMap),
+        classes: classes.map(SchoolClass.fromMap),
+      );
+      await txn.delete('subjects', where: 'id = ?', whereArgs: [id]);
+    });
   }
 
   @override

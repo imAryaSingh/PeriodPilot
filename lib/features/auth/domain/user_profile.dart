@@ -15,6 +15,7 @@ class UserProfile {
     required this.displayName,
     required this.role,
     this.schoolId,
+    this.teacherId,
     this.active = true,
   });
 
@@ -23,6 +24,7 @@ class UserProfile {
   final String displayName;
   final UserRole role;
   final String? schoolId;
+  final int? teacherId;
   final bool active;
 
   Map<String, Object?> toJson() => {
@@ -31,6 +33,7 @@ class UserProfile {
     'displayName': displayName,
     'role': role.name,
     'schoolId': schoolId,
+    'teacherId': teacherId,
     'active': active,
   };
 
@@ -40,6 +43,7 @@ class UserProfile {
     displayName: json['displayName'] as String,
     role: UserRole.values.byName(json['role'] as String),
     schoolId: json['schoolId'] as String?,
+    teacherId: (json['teacherId'] as num?)?.toInt(),
     active: json['active'] as bool? ?? true,
   );
 }

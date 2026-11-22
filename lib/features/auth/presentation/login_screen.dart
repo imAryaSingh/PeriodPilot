@@ -50,7 +50,7 @@ class _LoginScreenState extends State<LoginScreen> {
         _statusMessage = null;
         _errorMessage = email.isEmpty
             ? 'Enter your email address first.'
-            : 'Enter a valid email address.';
+            : 'Teacher ID passwords are set by your administrator. Ask them to issue a new password.';
       });
       return;
     }
@@ -190,23 +190,26 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 32),
                     TextFormField(
                       controller: _emailController,
-                      keyboardType: TextInputType.emailAddress,
+                      keyboardType: TextInputType.text,
                       textInputAction: TextInputAction.next,
                       autofillHints: const [
                         AutofillHints.username,
                         AutofillHints.email,
                       ],
                       decoration: const InputDecoration(
-                        labelText: 'Email address',
-                        prefixIcon: Icon(Icons.mail_outline_rounded),
+                        labelText: 'Email or Teacher ID',
+                        prefixIcon: Icon(Icons.badge_outlined),
                       ),
                       validator: (value) {
                         final email = value?.trim() ?? '';
-                        if (email.isEmpty) return 'Enter your email address';
-                        if (!RegExp(
-                          r'^[^@\s]+@[^@\s]+\.[^@\s]+$',
-                        ).hasMatch(email)) {
-                          return 'Enter a valid email address';
+                        if (email.isEmpty) {
+                          return 'Enter your email or Teacher ID';
+                        }
+                        if (!email.contains('@') &&
+                            !RegExp(
+                              r'^[a-zA-Z0-9][a-zA-Z0-9._-]{1,31}$',
+                            ).hasMatch(email)) {
+                          return 'Enter a valid email address or Teacher ID';
                         }
                         return null;
                       },

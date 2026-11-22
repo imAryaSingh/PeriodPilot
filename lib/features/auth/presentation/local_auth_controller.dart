@@ -127,6 +127,23 @@ class LocalAuthController extends ChangeNotifier {
     });
   }
 
+  Future<void> setTeacherLogin({
+    required int teacherId,
+    required String password,
+  }) async {
+    if (!usesFirebase || firebaseStore == null) {
+      throw const FirebaseAuthStoreException(
+        'Teacher logins require the Firebase school database.',
+      );
+    }
+    await _run(
+      () => firebaseStore!.setTeacherLogin(
+        teacherId: teacherId,
+        password: password,
+      ),
+    );
+  }
+
   Future<void> _run(Future<void> Function() action) async {
     isBusy = true;
     notifyListeners();

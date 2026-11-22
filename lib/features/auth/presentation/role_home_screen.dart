@@ -74,9 +74,10 @@ class _DashboardState extends State<_Dashboard> {
     final subjects = all[6] as List<Subject>;
     final own = teachers
         .where(
-          (t) =>
-              t.email.trim().toLowerCase() ==
-              widget.profile.email.trim().toLowerCase(),
+          (t) => widget.profile.teacherId != null
+              ? t.id == widget.profile.teacherId
+              : t.email.trim().toLowerCase() ==
+                    widget.profile.email.trim().toLowerCase(),
         )
         .firstOrNull;
     return _DashboardData(

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../data/school_database.dart';
 import '../domain/school_models.dart';
+import '../../auth/presentation/local_auth_controller.dart';
 
 class SchoolManagementScreen extends StatelessWidget {
   const SchoolManagementScreen({super.key, this.initialTabIndex = 0});
@@ -246,6 +247,46 @@ class _TeachersTabState extends State<_TeachersTab> {
     if (mounted) _reload();
   }
 
+  Future<void> _setupTeacherLogin(Teacher teacher) async {
+    if (teacher.staffCode.trim().isEmpty) {
+      _showError(context, 'Add a Teacher ID before setting up login.');
+      return;
+    }
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (_) => _TeacherLoginDialog(teacher: teacher),
+    );
+    if (saved == true && mounted) {
+      _reload();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Login set for ${teacher.fullName}. Give them Teacher ID ${teacher.staffCode} and the password you entered.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _deleteTeacher(Teacher teacher) async {
+    final database = context.read<SchoolDatabase>();
+    if (!await _confirmDelete(
+      context,
+      title: 'Delete ${teacher.fullName}?',
+      message:
+          'This permanently removes the teacher directory record. Teachers with a sign-in email or timetable, absence, or substitution history must be deactivated instead.',
+    )) {
+      return;
+    }
+    try {
+      await database.deleteTeacher(teacher.id!);
+      if (!mounted) return;
+      _reload();
+    } catch (error) {
+      if (mounted) _showError(context, error.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<List<Teacher>>(
     future: _teachers,
@@ -290,10 +331,25 @@ class _TeachersTabState extends State<_TeachersTab> {
                           trailing: Row(
                             mainAxisSize: MainAxisSize.min,
                             children: [
+                              if (context
+                                  .read<LocalAuthController>()
+                                  .usesFirebase)
+                                IconButton(
+                                  tooltip: 'Set or reset teacher login',
+                                  onPressed: teacher.isActive
+                                      ? () => _setupTeacherLogin(teacher)
+                                      : null,
+                                  icon: const Icon(Icons.key_outlined),
+                                ),
                               IconButton(
                                 tooltip: 'Edit teacher',
                                 onPressed: () => _edit(teacher),
                                 icon: const Icon(Icons.edit_outlined),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete teacher',
+                                onPressed: () => _deleteTeacher(teacher),
+                                icon: const Icon(Icons.delete_outline_rounded),
                               ),
                               Switch(
                                 value: teacher.isActive,
@@ -313,11 +369,132 @@ class _TeachersTabState extends State<_TeachersTab> {
   );
 }
 
+class _TeacherLoginDialog extends StatefulWidget {
+  const _TeacherLoginDialog({required this.teacher});
+
+  final Teacher teacher;
+
+  @override
+  State<_TeacherLoginDialog> createState() => _TeacherLoginDialogState();
+}
+
+class _TeacherLoginDialogState extends State<_TeacherLoginDialog> {
+  final _formKey = GlobalKey<FormState>();
+  final _password = TextEditingController();
+  final _confirmation = TextEditingController();
+  bool _saving = false;
+  bool _obscure = true;
+  String? _error;
+
+  @override
+  void dispose() {
+    _password.dispose();
+    _confirmation.dispose();
+    super.dispose();
+  }
+
+  Future<void> _save() async {
+    if (!_formKey.currentState!.validate()) return;
+    setState(() {
+      _saving = true;
+      _error = null;
+    });
+    try {
+      await context.read<LocalAuthController>().setTeacherLogin(
+        teacherId: widget.teacher.id!,
+        password: _password.text,
+      );
+      if (mounted) Navigator.pop(context, true);
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+    title: const Text('Set teacher login'),
+    content: SizedBox(
+      width: 400,
+      child: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text('Teacher ID: ${widget.teacher.staffCode}'),
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _password,
+              obscureText: _obscure,
+              autofocus: true,
+              decoration: InputDecoration(
+                labelText: 'Temporary password',
+                helperText:
+                    'At least 10 characters, including a letter and number.',
+                suffixIcon: IconButton(
+                  onPressed: () => setState(() => _obscure = !_obscure),
+                  icon: Icon(
+                    _obscure
+                        ? Icons.visibility_outlined
+                        : Icons.visibility_off_outlined,
+                  ),
+                ),
+              ),
+              validator: (value) {
+                final password = value ?? '';
+                if (password.length < 10 ||
+                    !RegExp(r'[A-Za-z]').hasMatch(password) ||
+                    !RegExp(r'[0-9]').hasMatch(password)) {
+                  return 'Use 10+ characters with a letter and number.';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _confirmation,
+              obscureText: true,
+              decoration: const InputDecoration(labelText: 'Confirm password'),
+              validator: (value) =>
+                  value != _password.text ? 'Passwords do not match.' : null,
+              onFieldSubmitted: (_) => _save(),
+            ),
+            if (_error != null) ...[
+              const SizedBox(height: 12),
+              _ErrorCard(message: _error!),
+            ],
+          ],
+        ),
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: _saving ? null : () => Navigator.pop(context, false),
+        child: const Text('Cancel'),
+      ),
+      FilledButton(
+        onPressed: _saving ? null : _save,
+        child: _saving
+            ? const SizedBox.square(
+                dimension: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Save credentials'),
+      ),
+    ],
+  );
+}
+
 String _teacherSubtitle(Teacher teacher) {
   final details = <String>[];
   if (teacher.staffCode.isNotEmpty) details.add('ID ${teacher.staffCode}');
   if (teacher.email.isNotEmpty) details.add(teacher.email);
   if (teacher.phone.isNotEmpty) details.add(teacher.phone);
+  if (teacher.hasLoginAccount) details.add('Login ready');
   if (!teacher.isActive) details.add('Inactive');
   return details.join('\n');
 }
@@ -731,6 +908,25 @@ class _ClassesTabState extends State<_ClassesTab> {
     if (mounted) _reload();
   }
 
+  Future<void> _deleteClass(SchoolClass schoolClass) async {
+    final database = context.read<SchoolDatabase>();
+    if (!await _confirmDelete(
+      context,
+      title: 'Delete ${schoolClass.name}?',
+      message:
+          'This permanently removes the class and its sections. Classes with timetable or substitution history, and predefined grades, must be deactivated instead.',
+    )) {
+      return;
+    }
+    try {
+      await database.deleteClass(schoolClass.id);
+      if (!mounted) return;
+      _reload();
+    } catch (error) {
+      if (mounted) _showError(context, error.toString());
+    }
+  }
+
   Future<void> _setSectionActive(SchoolSection item, bool value) async {
     await context.read<SchoolDatabase>().setSectionActive(item.id, value);
     if (mounted) _reload();
@@ -812,6 +1008,11 @@ class _ClassesTabState extends State<_ClassesTab> {
                                 tooltip: 'Edit class',
                                 onPressed: () => _editClass(schoolClass),
                                 icon: const Icon(Icons.edit_outlined),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete class',
+                                onPressed: () => _deleteClass(schoolClass),
+                                icon: const Icon(Icons.delete_outline_rounded),
                               ),
                               Tooltip(
                                 message: schoolClass.isActive
@@ -963,6 +1164,25 @@ class _SubjectsTabState extends State<_SubjectsTab> {
     if (mounted) _reload();
   }
 
+  Future<void> _deleteSubject(Subject subject) async {
+    final database = context.read<SchoolDatabase>();
+    if (!await _confirmDelete(
+      context,
+      title: 'Delete ${subject.name}?',
+      message:
+          'This permanently removes the subject. Subjects assigned to teachers or classes, or used in timetable or substitution history, must be deactivated instead.',
+    )) {
+      return;
+    }
+    try {
+      await database.deleteSubject(subject.id!);
+      if (!mounted) return;
+      _reload();
+    } catch (error) {
+      if (mounted) _showError(context, error.toString());
+    }
+  }
+
   @override
   Widget build(BuildContext context) => FutureBuilder<List<Subject>>(
     future: _subjects,
@@ -1014,6 +1234,11 @@ class _SubjectsTabState extends State<_SubjectsTab> {
                                 tooltip: 'Edit subject',
                                 onPressed: () => _edit(subject),
                                 icon: const Icon(Icons.edit_outlined),
+                              ),
+                              IconButton(
+                                tooltip: 'Delete subject',
+                                onPressed: () => _deleteSubject(subject),
+                                icon: const Icon(Icons.delete_outline_rounded),
                               ),
                               Switch(
                                 value: subject.isActive,
@@ -1322,3 +1547,31 @@ String _duplicateMessage(Object error, String field) =>
 void _showError(BuildContext context, String message) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
 }
+
+Future<bool> _confirmDelete(
+  BuildContext context, {
+  required String title,
+  required String message,
+}) async =>
+    await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: Theme.of(context).colorScheme.error,
+              foregroundColor: Theme.of(context).colorScheme.onError,
+            ),
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    ) ??
+    false;

@@ -74,6 +74,7 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
         email: d['email'] as String? ?? '',
         phone: d['phone'] as String? ?? '',
         isActive: d['isActive'] as bool? ?? true,
+        hasLoginAccount: d['authUid'] is String,
         subjectIds: ((d['subjectIds'] as List?) ?? const [])
             .whereType<num>()
             .map((id) => id.toInt())
@@ -129,6 +130,27 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
       'isActive': isActive,
       'updatedAt': FieldValue.serverTimestamp(),
     });
+  }
+
+  @override
+  Future<void> deleteTeacher(int id) async {
+    final values = await Future.wait<Object>([
+      getTeachers(),
+      getTimetableEntries(),
+      getAbsences(),
+      getSubstitutions(),
+    ]);
+    final teacher = firstOrNull(
+      (values[0] as List<Teacher>).where((item) => item.id == id),
+    );
+    if (teacher == null) throw const SchoolDataException('Teacher not found.');
+    validateTeacherCanBeDeleted(
+      teacher: teacher,
+      timetableEntries: values[1] as List<TimetableEntry>,
+      absences: values[2] as List<TeacherAbsence>,
+      substitutions: values[3] as List<SubstitutionAssignment>,
+    );
+    await (await _collection('teachers')).doc('$id').delete();
   }
 
   @override
@@ -210,6 +232,39 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     await (await _collection(
       'classes',
     )).doc('$id').update({'isActive': isActive});
+  }
+
+  @override
+  Future<void> deleteClass(int id) async {
+    final values = await Future.wait<Object>([
+      getClasses(),
+      getTimetableEntries(),
+      getSubstitutions(),
+    ]);
+    final schoolClass = firstOrNull(
+      (values[0] as List<SchoolClass>).where((item) => item.id == id),
+    );
+    if (schoolClass == null) {
+      throw const SchoolDataException('Class not found.');
+    }
+    validateClassCanBeDeleted(
+      schoolClass: schoolClass,
+      timetableEntries: values[1] as List<TimetableEntry>,
+      substitutions: values[2] as List<SubstitutionAssignment>,
+    );
+    final classRef = (await _collection('classes')).doc('$id');
+    final sections = await classRef.collection('sections').get();
+    if (sections.size > 499) {
+      throw const SchoolDataException(
+        'This class has too many sections to remove in one operation. Deactivate it instead.',
+      );
+    }
+    final batch = _firestore.batch();
+    for (final section in sections.docs) {
+      batch.delete(section.reference);
+    }
+    batch.delete(classRef);
+    await batch.commit();
   }
 
   @override
@@ -313,6 +368,28 @@ class FirebaseSchoolDatabase implements SchoolDatabase {
     await (await _collection(
       'subjects',
     )).doc('$id').update({'isActive': isActive});
+  }
+
+  @override
+  Future<void> deleteSubject(int id) async {
+    final subjectRef = (await _collection('subjects')).doc('$id');
+    if (!(await subjectRef.get()).exists) {
+      throw const SchoolDataException('Subject not found.');
+    }
+    final values = await Future.wait<Object>([
+      getTimetableEntries(),
+      getSubstitutions(),
+      getTeachers(),
+      getClasses(),
+    ]);
+    validateSubjectCanBeDeleted(
+      subjectId: id,
+      timetableEntries: values[0] as List<TimetableEntry>,
+      substitutions: values[1] as List<SubstitutionAssignment>,
+      teachers: values[2] as List<Teacher>,
+      classes: values[3] as List<SchoolClass>,
+    );
+    await subjectRef.delete();
   }
 
   @override

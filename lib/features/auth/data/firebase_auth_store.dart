@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_functions/cloud_functions.dart';
 
 import '../domain/user_profile.dart';
 
@@ -99,8 +100,12 @@ class FirebaseAuthStore {
     required String email,
     required String password,
   }) async {
+    final login = email.trim();
+    final authEmail = login.contains('@')
+        ? login.toLowerCase()
+        : _teacherAuthEmail(login);
     final credential = await _auth.signInWithEmailAndPassword(
-      email: email.trim().toLowerCase(),
+      email: authEmail,
       password: password,
     );
     try {
@@ -113,6 +118,34 @@ class FirebaseAuthStore {
       if (_auth.currentUser?.uid == credential.user?.uid) await _auth.signOut();
       rethrow;
     }
+  }
+
+  Future<void> setTeacherLogin({
+    required int teacherId,
+    required String password,
+  }) async {
+    try {
+      await FirebaseFunctions.instanceFor(
+        region: 'us-central1',
+      ).httpsCallable('setTeacherLogin').call<Map<String, dynamic>>({
+        'teacherId': teacherId,
+        'password': password,
+      });
+    } on FirebaseFunctionsException catch (error) {
+      throw FirebaseAuthStoreException(
+        error.message ?? 'Could not set up the teacher login.',
+      );
+    }
+  }
+
+  String _teacherAuthEmail(String teacherId) {
+    final normalized = teacherId.trim().toLowerCase();
+    if (!RegExp(r'^[a-z0-9][a-z0-9._-]{1,31}$').hasMatch(normalized)) {
+      throw const FirebaseAuthStoreException(
+        'Enter a valid email address or Teacher ID.',
+      );
+    }
+    return 'teacher.$normalized@login.periodpilot.invalid';
   }
 
   Future<void> signOut() => _auth.signOut();
@@ -134,6 +167,7 @@ class FirebaseAuthStore {
             data['displayName'] as String? ?? currentUser?.displayName ?? '',
         role: UserRole.values.byName(data['role'] as String),
         schoolId: data['schoolId'] as String?,
+        teacherId: (data['teacherId'] as num?)?.toInt(),
         active: data['active'] as bool? ?? true,
       );
 }

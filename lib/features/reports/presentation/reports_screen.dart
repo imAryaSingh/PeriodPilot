@@ -244,9 +244,10 @@ class _ReportsScreenState extends State<ReportsScreen> {
     final profile = context.read<LocalAuthController>().profile;
     final own = d.teachers
         .where(
-          (t) =>
-              t.email.trim().toLowerCase() ==
-              (profile?.email ?? '').trim().toLowerCase(),
+          (t) => profile?.teacherId != null
+              ? t.id == profile!.teacherId
+              : t.email.trim().toLowerCase() ==
+                    (profile?.email ?? '').trim().toLowerCase(),
         )
         .firstOrNull;
     final rows = <List<String>>[];
